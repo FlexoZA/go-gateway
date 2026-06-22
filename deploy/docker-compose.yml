@@ -80,6 +80,9 @@ services:
       # Secret for signing admin session cookies (>=16 chars). Required.
       - SESSION_SECRET=${SESSION_SECRET:?set SESSION_SECRET in your .env}
       - SESSION_TTL_HOURS=${SESSION_TTL_HOURS:-12}
+      # Keep cookies Secure (HTTPS) by default. Set false ONLY for a staging box
+      # served over plain HTTP, otherwise login silently fails behind a domain.
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
       - NODE_ENV=production
     ports:
       - "3000:3000"

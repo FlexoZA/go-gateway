@@ -8,6 +8,16 @@ export const SESSION_COOKIE = "dgw_admin_session";
 const ttlHours = Number(process.env.SESSION_TTL_HOURS || "12");
 export const sessionMaxAge = Math.max(1, ttlHours) * 3600; // seconds
 
+// Whether the session cookie is marked Secure. Defaults to true in production,
+// but can be turned off (SESSION_COOKIE_SECURE=false) for a staging box served
+// over plain HTTP — browsers refuse to store Secure cookies over http on a real
+// domain, which silently breaks login. ALWAYS keep this on (use HTTPS) in prod.
+export function cookieSecure(): boolean {
+  const v = process.env.SESSION_COOKIE_SECURE;
+  if (v != null && v !== "") return v === "true" || v === "1";
+  return process.env.NODE_ENV === "production";
+}
+
 function secret(): Uint8Array {
   const s = process.env.SESSION_SECRET;
   if (!s || s.length < 16) {

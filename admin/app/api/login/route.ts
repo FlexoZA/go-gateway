@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { gatewayConfigured, gatewayFetch } from "@/lib/gateway";
-import { SESSION_COOKIE, createSession, sessionMaxAge } from "@/lib/session";
+import { SESSION_COOKIE, cookieSecure, createSession, sessionMaxAge } from "@/lib/session";
 
 // POST /api/login — verify credentials against the gateway's user store, then
 // issue a signed session cookie. The gateway API key stays server-side.
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
   out.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: cookieSecure(),
     path: "/",
     maxAge: sessionMaxAge,
   });
