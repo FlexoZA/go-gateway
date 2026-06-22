@@ -1,0 +1,89 @@
+# One service per unit type, all writing to a shared PostgreSQL. To add another
+# unit type, copy the howen service, change UNIT, the container/image name,
+# LISTEN_PORT and the published port.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: device-gateway-postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-gateway}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-gateway}
+      - POSTGRES_DB=${POSTGRES_DB:-gateway}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gateway} -d ${POSTGRES_DB:-gateway}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  howen:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        UNIT: howen
+    image: device-gateway-howen:latest
+    container_name: device-gateway-howen
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - GATEWAY=${GATEWAY:-dfm-gw1.cwe.cloud}
+      - LISTEN_HOST=0.0.0.0
+      - LISTEN_PORT=33000
+      # Management/control HTTP API (API-key protected). 0 disables.
+      - HTTP_PORT=${HTTP_PORT:-8080}
+      # Shared secret the admin panel uses to authenticate (works before any DB
+      # API key exists — enables first-run setup). Same value as the admin's
+      # GATEWAY_API_TOKEN. Generate: openssl rand -hex 32
+      - INTERNAL_API_TOKEN=${ADMIN_API_TOKEN:-}
+      # Telemetry sink: the universal-JSON endpoint that stores all GPS/event data.
+      - DEVICE_WEBHOOK_URL=${DEVICE_WEBHOOK_URL:-http://gateway.acmtrack.net:8080/universal/gps/json/}
+      # Gateway's own DB — device-verification registry (NOT telemetry).
+      - DATABASE_URL=postgres://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway}@postgres:5432/${POSTGRES_DB:-gateway}?sslmode=disable
+      # allow_all | postgres (defaults to postgres when DATABASE_URL is set)
+      - DEVICE_AUTH_MODE=${DEVICE_AUTH_MODE:-postgres}
+      # true = quarantine + reject unknown serials (require approval, default);
+      # false = auto-provision + admit
+      - DEVICE_REJECT_UNKNOWN=${DEVICE_REJECT_UNKNOWN:-true}
+      # Mapping edits apply instantly via NOTIFY; this is a safety-net reload
+      # interval in case a notification is missed (seconds; 0 disables the net).
+      - MAPPING_REFRESH_SECONDS=${MAPPING_REFRESH_SECONDS:-60}
+      # Set DEBUG=1 (or DEBUG=tcp/howen) for verbose per-frame logging.
+      - DEBUG=${DEBUG:-}
+    ports:
+      - "33000:33000"
+      - "8080:8080"
+    restart: unless-stopped
+
+  # Admin panel (Next.js). Talks to the gateway ONLY over its HTTP API, using a
+  # server-held API key — it has no database access of its own.
+  admin:
+    build:
+      context: ../admin
+      dockerfile: Dockerfile
+    image: device-gateway-admin:latest
+    container_name: device-gateway-admin
+    depends_on:
+      - howen
+    environment:
+      # The gateway HTTP API, reachable over the compose network.
+      - GATEWAY_URL=http://howen:8080
+      # Shared internal token the panel uses to authenticate to the gateway
+      # (same value as the gateway's INTERNAL_API_TOKEN). This is all the panel
+      # needs — no pre-minted DB key. Generate: openssl rand -hex 32
+      - GATEWAY_API_TOKEN=${ADMIN_API_TOKEN:?set ADMIN_API_TOKEN in your .env}
+      # Secret for signing admin session cookies (>=16 chars). Required.
+      - SESSION_SECRET=${SESSION_SECRET:?set SESSION_SECRET in your .env}
+      - SESSION_TTL_HOURS=${SESSION_TTL_HOURS:-12}
+      - NODE_ENV=production
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

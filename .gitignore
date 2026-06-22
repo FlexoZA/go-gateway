@@ -1,0 +1,31 @@
+# --- Secrets / local env (NEVER commit) ---
+.env
+.env.local
+*.local.env
+deploy/.env
+admin/.env
+admin/.env.local
+# keep the templates
+!**/.env.example
+!example.env
+
+# --- Go build output ---
+/bin/
+/out/
+gateway
+*.test
+
+# --- Node / Next.js (admin app) ---
+node_modules/
+.next/
+out/
+build/
+next-env.d.ts
+*.tsbuildinfo
+
+# --- Tooling / editor / OS ---
+.claude/
+.idea/
+.vscode/
+*.swp
+.DS_Store

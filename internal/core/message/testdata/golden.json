@@ -1,0 +1,576 @@
+[
+  {
+    "name": "howen_gps_full",
+    "output": {
+      "message_ver": 1,
+      "message_type": "gps",
+      "gateway": "dfm-gw1.cwe.cloud",
+      "port": 33000,
+      "transmission": "tcp",
+      "timestamp": "2026-03-14T08:34:56+00:00",
+      "source": "device",
+      "seq_no": 1,
+      "valid": true,
+      "device": {
+        "identifier": "imei",
+        "imei": "865847053306518",
+        "serial_no": "10011",
+        "firm_ver": null,
+        "type": "howen",
+        "model": "hero-mc30-02"
+      },
+      "network": {
+        "remote_ipv4": "102.135.1.20",
+        "remote_ipv6": null,
+        "remote_port": 54321,
+        "mac": null
+      },
+      "gsm": [
+        {
+          "cid": [],
+          "lcid": [],
+          "lac": [],
+          "carrier": null,
+          "mcc": [],
+          "mnc": [],
+          "rssi": [],
+          "rcpi": [],
+          "ta": [],
+          "bs_count": [],
+          "signal_lvl": 8,
+          "signal_str": 80,
+          "data_mode": "5",
+          "status": [
+            "howen_modem_health:normal",
+            "network",
+            "howen_network_type:5",
+            "howen_radio:4g",
+            "data"
+          ]
+        }
+      ],
+      "sims": [
+        {
+          "msisdn": null,
+          "iccid": null,
+          "imsi": null
+        }
+      ],
+      "gps": {
+        "timestamp": "2026-03-14T10:34:56+00:00",
+        "latitude": -33.9249,
+        "longitude": 18.4241,
+        "altitude": 54,
+        "speed": 64,
+        "heading": 91,
+        "satellites": 8,
+        "activity": "driving",
+        "odometer": null,
+        "trip_odo": null,
+        "gnss": true,
+        "hdop": 9,
+        "vdop": null,
+        "pdop": null,
+        "tdop": null,
+        "fix": [
+          "fixed"
+        ]
+      },
+      "events": [],
+      "sensors": [
+        [
+          "ignition",
+          "on"
+        ],
+        [
+          "accel_x",
+          -0.45
+        ],
+        [
+          "accel_y",
+          0.01
+        ],
+        [
+          "accel_z",
+          0.98
+        ],
+        [
+          "disk_status",
+          1
+        ],
+        [
+          "disk_size_mb",
+          60906
+        ],
+        [
+          "disk_free_mb",
+          12000
+        ],
+        [
+          "alarm_video_loss_mask",
+          2
+        ],
+        [
+          "alarm_motion_detection_mask",
+          3
+        ],
+        [
+          "alarm_video_blind_mask",
+          4
+        ],
+        [
+          "alarm_input_trigger_mask",
+          5
+        ],
+        [
+          "temp_in_vehicle_c",
+          24
+        ],
+        [
+          "temp_out_vehicle_c",
+          19
+        ],
+        [
+          "temp_motor_c",
+          62
+        ],
+        [
+          "temp_device_c",
+          41
+        ],
+        [
+          "humidity_in_vehicle",
+          45
+        ],
+        [
+          "humidity_out_vehicle",
+          38
+        ]
+      ],
+      "inputs": null,
+      "outputs": null,
+      "aux_inputs": [],
+      "an_inputs": [],
+      "obd_ii": {
+        "mode_01": [],
+        "mode_09": []
+      },
+      "can_bus": []
+    }
+  },
+  {
+    "name": "howen_event_trip_end",
+    "output": {
+      "message_ver": 1,
+      "message_type": "gps",
+      "gateway": "dfm-gw1.cwe.cloud",
+      "port": 33000,
+      "transmission": "tcp",
+      "timestamp": "2026-03-14T09:34:56+00:00",
+      "source": "device",
+      "seq_no": 2,
+      "valid": true,
+      "device": {
+        "identifier": "imei",
+        "imei": "865847053306518",
+        "serial_no": "10011",
+        "firm_ver": null,
+        "type": "howen",
+        "model": "hero-mc30-02"
+      },
+      "network": {
+        "remote_ipv4": "102.135.1.20",
+        "remote_ipv6": null,
+        "remote_port": 54321,
+        "mac": null
+      },
+      "gsm": [
+        {
+          "cid": [],
+          "lcid": [],
+          "lac": [],
+          "carrier": null,
+          "mcc": [],
+          "mnc": [],
+          "rssi": [],
+          "rcpi": [],
+          "ta": [],
+          "bs_count": [],
+          "signal_lvl": null,
+          "signal_str": null,
+          "data_mode": null,
+          "status": []
+        }
+      ],
+      "sims": [
+        {
+          "msisdn": null,
+          "iccid": null,
+          "imsi": null
+        }
+      ],
+      "gps": {
+        "timestamp": "2026-03-14T11:34:56+00:00",
+        "latitude": -33.9249,
+        "longitude": 18.4241,
+        "altitude": 54,
+        "speed": 0,
+        "heading": 91,
+        "satellites": 8,
+        "activity": "idling",
+        "odometer": null,
+        "trip_odo": null,
+        "gnss": true,
+        "hdop": 9,
+        "vdop": null,
+        "pdop": null,
+        "tdop": null,
+        "fix": [
+          "fixed"
+        ]
+      },
+      "events": [
+        [
+          "TRIP:END",
+          [
+            [
+              "duration_seconds",
+              3600
+            ],
+            [
+              "mileage_km",
+              42.5
+            ],
+            [
+              "avg_speed_kmh",
+              35
+            ],
+            [
+              "max_speed_kmh",
+              80
+            ],
+            [
+              "start_latitude",
+              -33.9
+            ],
+            [
+              "start_longitude",
+              18.4
+            ],
+            [
+              "driver_id",
+              "D7"
+            ]
+          ]
+        ]
+      ],
+      "sensors": [
+        [
+          "ignition",
+          "on"
+        ]
+      ],
+      "inputs": null,
+      "outputs": null,
+      "aux_inputs": [],
+      "an_inputs": [],
+      "obd_ii": {
+        "mode_01": [],
+        "mode_09": []
+      },
+      "can_bus": []
+    }
+  },
+  {
+    "name": "howen_event_gsensor_vibration",
+    "output": {
+      "message_ver": 1,
+      "message_type": "gps",
+      "gateway": "dfm-gw1.cwe.cloud",
+      "port": 33000,
+      "transmission": "tcp",
+      "timestamp": "2026-03-14T09:40:00+00:00",
+      "source": "device",
+      "seq_no": 3,
+      "valid": true,
+      "device": {
+        "identifier": "imei",
+        "imei": "865847053306518",
+        "serial_no": "10011",
+        "firm_ver": null,
+        "type": "howen",
+        "model": "hero-mc30-02"
+      },
+      "network": {
+        "remote_ipv4": "102.135.1.20",
+        "remote_ipv6": null,
+        "remote_port": 54321,
+        "mac": null
+      },
+      "gsm": [
+        {
+          "cid": [],
+          "lcid": [],
+          "lac": [],
+          "carrier": null,
+          "mcc": [],
+          "mnc": [],
+          "rssi": [],
+          "rcpi": [],
+          "ta": [],
+          "bs_count": [],
+          "signal_lvl": null,
+          "signal_str": null,
+          "data_mode": null,
+          "status": []
+        }
+      ],
+      "sims": [
+        {
+          "msisdn": null,
+          "iccid": null,
+          "imsi": null
+        }
+      ],
+      "gps": {
+        "timestamp": "2026-03-14T11:40:00+00:00",
+        "latitude": -33.9249,
+        "longitude": 18.4241,
+        "altitude": null,
+        "speed": 12,
+        "heading": 91,
+        "satellites": 8,
+        "activity": "driving",
+        "odometer": null,
+        "trip_odo": null,
+        "gnss": true,
+        "hdop": null,
+        "vdop": null,
+        "pdop": null,
+        "tdop": null,
+        "fix": [
+          "fixed"
+        ]
+      },
+      "events": [
+        [
+          "ALARM:VIBRATION",
+          [
+            [
+              "X",
+              -0.45
+            ],
+            [
+              "Y",
+              0.01
+            ],
+            [
+              "Z",
+              0.98
+            ]
+          ]
+        ]
+      ],
+      "sensors": [
+        [
+          "ignition",
+          "on"
+        ],
+        [
+          "accel_x",
+          -0.45
+        ],
+        [
+          "accel_y",
+          0.01
+        ],
+        [
+          "accel_z",
+          0.98
+        ]
+      ],
+      "inputs": null,
+      "outputs": null,
+      "aux_inputs": [],
+      "an_inputs": [],
+      "obd_ii": {
+        "mode_01": [],
+        "mode_09": []
+      },
+      "can_bus": []
+    }
+  },
+  {
+    "name": "howen_gps_ipv6_serial_only_no_fix",
+    "output": {
+      "message_ver": 1,
+      "message_type": "gps",
+      "gateway": "dfm-gw1.cwe.cloud",
+      "port": 33000,
+      "transmission": "tcp",
+      "timestamp": "2026-03-14T10:00:00+00:00",
+      "source": "device",
+      "seq_no": 1,
+      "valid": false,
+      "device": {
+        "identifier": "serial_no",
+        "imei": null,
+        "serial_no": "TRACKER_42",
+        "firm_ver": null,
+        "type": "howen",
+        "model": "hero-mc30-02"
+      },
+      "network": {
+        "remote_ipv4": null,
+        "remote_ipv6": "2c0f:f720:0:1::5",
+        "remote_port": 7000,
+        "mac": null
+      },
+      "gsm": [
+        {
+          "cid": [],
+          "lcid": [],
+          "lac": [],
+          "carrier": null,
+          "mcc": [],
+          "mnc": [],
+          "rssi": [],
+          "rcpi": [],
+          "ta": [],
+          "bs_count": [],
+          "signal_lvl": null,
+          "signal_str": null,
+          "data_mode": null,
+          "status": []
+        }
+      ],
+      "sims": [
+        {
+          "msisdn": null,
+          "iccid": null,
+          "imsi": null
+        }
+      ],
+      "gps": {
+        "timestamp": "2026-03-14T12:00:00+00:00",
+        "latitude": -33.9,
+        "longitude": 18.4,
+        "altitude": null,
+        "speed": 0,
+        "heading": 0,
+        "satellites": 0,
+        "activity": "parked",
+        "odometer": null,
+        "trip_odo": null,
+        "gnss": false,
+        "hdop": null,
+        "vdop": null,
+        "pdop": null,
+        "tdop": null,
+        "fix": [
+          "invalid_fix"
+        ]
+      },
+      "events": [],
+      "sensors": [
+        [
+          "ignition",
+          "off"
+        ]
+      ],
+      "inputs": null,
+      "outputs": null,
+      "aux_inputs": [],
+      "an_inputs": [],
+      "obd_ii": {
+        "mode_01": [],
+        "mode_09": []
+      },
+      "can_bus": []
+    }
+  },
+  {
+    "name": "generic_comma_decimal_strings",
+    "output": {
+      "message_ver": 1,
+      "message_type": "gps",
+      "gateway": "gw2",
+      "port": 6610,
+      "transmission": "tcp",
+      "timestamp": "2026-03-14T12:05:00+02:00",
+      "source": "device",
+      "seq_no": 1,
+      "valid": true,
+      "device": {
+        "identifier": "serial_no",
+        "imei": null,
+        "serial_no": "TF290_123",
+        "firm_ver": null,
+        "type": "tramigo_tf290",
+        "model": "tf290"
+      },
+      "network": {
+        "remote_ipv4": "41.1.2.3",
+        "remote_ipv6": null,
+        "remote_port": 5555,
+        "mac": null
+      },
+      "gsm": [
+        {
+          "cid": [],
+          "lcid": [],
+          "lac": [],
+          "carrier": null,
+          "mcc": [],
+          "mnc": [],
+          "rssi": [],
+          "rcpi": [],
+          "ta": [],
+          "bs_count": [],
+          "signal_lvl": 21,
+          "signal_str": null,
+          "data_mode": null,
+          "status": []
+        }
+      ],
+      "sims": [
+        {
+          "msisdn": null,
+          "iccid": null,
+          "imsi": null
+        }
+      ],
+      "gps": {
+        "timestamp": "2026-03-14T14:05:00+02:00",
+        "latitude": -33.9249,
+        "longitude": 18.4241,
+        "altitude": null,
+        "speed": 4.52,
+        "heading": 180,
+        "satellites": 6,
+        "activity": "unknown",
+        "odometer": null,
+        "trip_odo": null,
+        "gnss": true,
+        "hdop": null,
+        "vdop": null,
+        "pdop": null,
+        "tdop": null,
+        "fix": [
+          "fixed"
+        ]
+      },
+      "events": [],
+      "sensors": [],
+      "inputs": null,
+      "outputs": null,
+      "aux_inputs": [],
+      "an_inputs": [],
+      "obd_ii": {
+        "mode_01": [],
+        "mode_09": []
+      },
+      "can_bus": []
+    }
+  }
+]

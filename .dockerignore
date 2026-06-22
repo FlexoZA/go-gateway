@@ -1,0 +1,9 @@
+.git
+.gitignore
+README.md
+*.md
+deploy
+tools
+templates
+**/testdata
+**/*_test.go

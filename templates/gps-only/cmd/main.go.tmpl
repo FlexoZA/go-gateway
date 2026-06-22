@@ -1,0 +1,63 @@
+// Command __UNIT__ runs the __UNIT__ unit-type gateway server.
+package main
+
+import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/dfm/device-gateway/internal/core/config"
+	"github.com/dfm/device-gateway/internal/core/device"
+	"github.com/dfm/device-gateway/internal/core/gateway"
+	"github.com/dfm/device-gateway/internal/core/logging"
+	"github.com/dfm/device-gateway/internal/core/message"
+	"github.com/dfm/device-gateway/internal/core/postgres"
+	"github.com/dfm/device-gateway/internal/core/webhook"
+	"github.com/dfm/device-gateway/internal/__UNIT__"
+)
+
+func main() {
+	cfg := config.Load()
+	log := logging.New("__UNIT__")
+
+	deps := gateway.Deps{
+		Config:  cfg,
+		Log:     log,
+		Builder: message.NewBuilder(cfg.Gateway, cfg.WebhookTimezoneOffsetHours),
+		Auth:    device.AllowAll{},
+	}
+
+	// PostgreSQL is the device-verification registry, not a telemetry store.
+	var store *postgres.Store
+	if cfg.DatabaseURL != "" {
+		connCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		s, err := postgres.New(connCtx, cfg.DatabaseURL, cfg.DeviceRejectUnknown)
+		cancel()
+		if err != nil {
+			log.Error(map[string]any{"event": "postgres_unavailable", "error": err.Error()})
+			os.Exit(1)
+		}
+		store = s
+		defer store.Close()
+		if cfg.DeviceAuthMode == "postgres" {
+			deps.Auth = store
+		}
+	}
+	// The webhook is the telemetry sink (stores all GPS/event data).
+	if wh := webhook.New(cfg.WebhookURL); wh.Enabled() {
+		deps.Sinks = append(deps.Sinks, wh)
+	}
+
+	srv := gateway.New(__UNIT__.New(), deps)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	log.Info(map[string]any{"event": "starting", "unit": "__UNIT__"})
+	if err := srv.ListenAndServe(ctx); err != nil {
+		log.Error(map[string]any{"event": "fatal", "error": err.Error()})
+		os.Exit(1)
+	}
+}

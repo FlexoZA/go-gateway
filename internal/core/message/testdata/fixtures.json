@@ -1,0 +1,104 @@
+[
+  {
+    "name": "howen_gps_full",
+    "options": { "gateway": "dfm-gw1.cwe.cloud", "port": 33000, "transmission": "tcp", "timezoneOffsetHours": 0 },
+    "input": {
+      "serial": "10011",
+      "make": "howen",
+      "model": "Hero-MC30-02",
+      "type": "gps",
+      "port": 33000,
+      "network": { "remoteAddress": "102.135.1.20", "remotePort": 54321 },
+      "receivedAt": "2026-03-14T08:34:56.000Z",
+      "payload": {
+        "latitude": -33.9249, "longitude": 18.4241, "speed": 64, "altitude": 54, "accuracy": 9,
+        "bearing": 91, "satellites": 8, "utc": 1773484496, "positioning": 1, "howen_location_type": 1,
+        "signal_lvl": 8, "signal_str": 80, "data_mode": "5",
+        "gsm_status": ["howen_modem_health:normal", "network", "howen_network_type:5", "howen_radio:4g", "data"],
+        "acc_x": -0.45, "acc_y": 0.01, "acc_z": 0.98,
+        "disk_status": 1, "disk_size_mb": 60906, "disk_free_mb": 12000,
+        "alarm_video_loss_mask": 2, "alarm_motion_detection_mask": 3, "alarm_video_blind_mask": 4, "alarm_input_trigger_mask": 5,
+        "temp_in_vehicle_c": 24, "temp_out_vehicle_c": 19, "temp_motor_c": 62, "temp_device_c": 41,
+        "humidity_in_vehicle": 45, "humidity_out_vehicle": 38,
+        "imei": "865847053306518", "ignition": 1, "name": "gps"
+      }
+    }
+  },
+  {
+    "name": "howen_event_trip_end",
+    "options": { "gateway": "dfm-gw1.cwe.cloud", "port": 33000, "transmission": "tcp", "timezoneOffsetHours": 0 },
+    "input": {
+      "serial": "10011",
+      "make": "howen",
+      "model": "Hero-MC30-02",
+      "type": "event",
+      "port": 33000,
+      "network": { "remoteAddress": "102.135.1.20", "remotePort": 54321 },
+      "receivedAt": "2026-03-14T09:34:56.000Z",
+      "payload": {
+        "latitude": -33.9249, "longitude": 18.4241, "speed": 0, "altitude": 54, "accuracy": 9,
+        "bearing": 91, "satellites": 8, "utc": 1773488096, "positioning": 1,
+        "imei": "865847053306518", "ignition": 1, "name": "event",
+        "event": ["TRIP:END"],
+        "howen_event_code": 43,
+        "howen_event_detail": { "dur": 3600, "mile": 42.5, "avg": 35, "max": 80, "slat": -33.9, "slng": 18.4, "drid": "D7" },
+        "howen_alarm": { "ec": "43", "st": "2026-03-14 08:34:56", "et": "2026-03-14 09:34:56", "det": {} },
+        "event_start_utc": 1773484496, "event_end_utc": 1773488096
+      }
+    }
+  },
+  {
+    "name": "howen_event_gsensor_vibration",
+    "options": { "gateway": "dfm-gw1.cwe.cloud", "port": 33000, "transmission": "tcp", "timezoneOffsetHours": 0 },
+    "input": {
+      "serial": "10011",
+      "make": "howen",
+      "model": "Hero-MC30-02",
+      "type": "event",
+      "port": 33000,
+      "network": { "remoteAddress": "102.135.1.20", "remotePort": 54321 },
+      "receivedAt": "2026-03-14T09:40:00.000Z",
+      "payload": {
+        "latitude": -33.9249, "longitude": 18.4241, "speed": 12, "bearing": 91, "satellites": 8,
+        "utc": 1773488400, "positioning": 1, "imei": "865847053306518", "ignition": 1, "name": "event",
+        "event": ["ALARM:VIBRATION"], "howen_event_code": 12,
+        "acc_x": -0.45, "acc_y": 0.01, "acc_z": 0.98,
+        "event_start_utc": 1773488400, "event_end_utc": null
+      }
+    }
+  },
+  {
+    "name": "howen_gps_ipv6_serial_only_no_fix",
+    "options": { "gateway": "dfm-gw1.cwe.cloud", "port": 33000, "transmission": "tcp", "timezoneOffsetHours": 0 },
+    "input": {
+      "serial": "TRACKER_42",
+      "make": "howen",
+      "model": "Hero-MC30-02",
+      "type": "gps",
+      "port": 33000,
+      "network": { "remoteAddress": "2c0f:f720:0:1::5", "remotePort": 7000 },
+      "receivedAt": "2026-03-14T10:00:00.000Z",
+      "payload": {
+        "latitude": -33.9, "longitude": 18.4, "speed": 0, "bearing": 0, "satellites": 0,
+        "utc": 1773489600, "positioning": 0, "imei": null, "ignition": 0, "name": "gps"
+      }
+    }
+  },
+  {
+    "name": "generic_comma_decimal_strings",
+    "options": { "gateway": "gw2", "port": 6610, "transmission": "tcp", "timezoneOffsetHours": 2 },
+    "input": {
+      "serial": "TF290_123",
+      "make": "tramigo_tf290",
+      "model": "TF290",
+      "type": "gps",
+      "port": 6610,
+      "network": { "remoteAddress": "41.1.2.3", "remotePort": 5555 },
+      "receivedAt": "2026-03-14T10:05:00.000Z",
+      "payload": {
+        "latitude": "-33,9249", "longitude": "18,4241", "speed": "4,52", "bearing": "180",
+        "satellites": "6", "utc": 1773489900, "positioning": "1", "signal": "21", "name": "gps"
+      }
+    }
+  }
+]
