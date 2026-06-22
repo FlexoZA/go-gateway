@@ -60,7 +60,27 @@ type Config struct {
 	// event mappings from the database. 0 disables periodic refresh (mappings are
 	// still loaded once at startup). Default 60.
 	MappingRefreshSeconds int
+
+	// --- Video / live media (HLS) ---
+
+	// MediaPort is the TCP port devices connect to for media (video) frames,
+	// separate from the control port. Default 33001.
+	MediaPort int
+
+	// MediaAdvertiseHost is the host (no port) that the device dials back for
+	// media — embedded in the live-preview "srv" field as <host>:<MediaPort>.
+	// Empty DISABLES video (the device would have nowhere to send the stream).
+	MediaAdvertiseHost string
+
+	// HLSRoot is the directory where ffmpeg writes HLS playlists/segments.
+	HLSRoot string
+
+	// FFmpegPath is the ffmpeg binary used to remux H.264 → HLS.
+	FFmpegPath string
 }
+
+// VideoEnabled reports whether live media streaming is configured.
+func (c Config) VideoEnabled() bool { return c.MediaAdvertiseHost != "" }
 
 // Load reads configuration from the environment, applying sensible defaults.
 func Load() Config {
@@ -86,6 +106,10 @@ func Load() Config {
 		DeviceAuthMode:             authMode,
 		DeviceRejectUnknown:        getenvBool("DEVICE_REJECT_UNKNOWN", true),
 		MappingRefreshSeconds:      getenvInt("MAPPING_REFRESH_SECONDS", 60),
+		MediaPort:                  getenvInt("MEDIA_PORT", 33001),
+		MediaAdvertiseHost:         os.Getenv("MEDIA_ADVERTISE_HOST"),
+		HLSRoot:                    getenv("HLS_ROOT", "/tmp/hls"),
+		FFmpegPath:                 getenv("FFMPEG_PATH", "ffmpeg"),
 	}
 }
 

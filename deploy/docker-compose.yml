@@ -53,10 +53,16 @@ services:
       # Mapping edits apply instantly via NOTIFY; this is a safety-net reload
       # interval in case a notification is missed (seconds; 0 disables the net).
       - MAPPING_REFRESH_SECONDS=${MAPPING_REFRESH_SECONDS:-60}
+      # Live video (HLS). MEDIA_ADVERTISE_HOST is the host devices dial back for
+      # media frames (no port) — usually the gateway's public hostname. Empty
+      # DISABLES video. The media port (33001) must be published below + reachable.
+      - MEDIA_ADVERTISE_HOST=${MEDIA_ADVERTISE_HOST:-}
+      - MEDIA_PORT=${MEDIA_PORT:-33001}
       # Set DEBUG=1 (or DEBUG=tcp/howen) for verbose per-frame logging.
       - DEBUG=${DEBUG:-}
     ports:
       - "33000:33000"
+      - "33001:33001"
       - "8080:8080"
     restart: unless-stopped
 

@@ -17,8 +17,22 @@ import (
 	"github.com/dfm/device-gateway/internal/core/config"
 	"github.com/dfm/device-gateway/internal/core/device"
 	"github.com/dfm/device-gateway/internal/core/logging"
+	"github.com/dfm/device-gateway/internal/core/media"
 	"github.com/dfm/device-gateway/internal/core/message"
 )
+
+// StreamInfo describes a started live video stream.
+type StreamInfo struct {
+	SessionID string `json:"session_id"`
+	HLSPath   string `json:"hls_path"` // <serial>/<camera>/<profile>/stream.m3u8
+}
+
+// VideoController is implemented by a protocol session that can start/stop a live
+// video stream on its device. The HTTP API reaches it through the Hub.
+type VideoController interface {
+	StartLive(ctx context.Context, camera, profile int) (StreamInfo, error)
+	StopLive(ctx context.Context, camera, profile int) error
+}
 
 // Capabilities declares what a unit type supports. GPS-only trackers leave the
 // optional capabilities false so no video/command code is wired in.
@@ -83,6 +97,14 @@ type Deps struct {
 	// DeviceErrors persists device-reported errors. May be nil (no database);
 	// Conn.EmitDeviceError nil-checks before using it.
 	DeviceErrors DeviceErrorRecorder
+
+	// Media runs live HLS streams; nil when video is disabled. A protocol
+	// session that supports video reads it (and MediaAdvertiseHost) to start
+	// streams; it must nil-check.
+	Media *media.Manager
+	// MediaAdvertiseHost is the host:port the device dials back for media frames
+	// (embedded in the start-stream command). Empty when video is disabled.
+	MediaAdvertiseHost string
 }
 
 // Conn wraps a device socket with framework dependencies.

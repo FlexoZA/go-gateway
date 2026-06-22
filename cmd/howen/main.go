@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	"github.com/dfm/device-gateway/internal/core/gateway"
 	"github.com/dfm/device-gateway/internal/core/httpapi"
 	"github.com/dfm/device-gateway/internal/core/logging"
+	"github.com/dfm/device-gateway/internal/core/media"
 	"github.com/dfm/device-gateway/internal/core/message"
 	"github.com/dfm/device-gateway/internal/core/postgres"
 	"github.com/dfm/device-gateway/internal/core/webhook"
@@ -84,6 +86,18 @@ func main() {
 		log.Info(map[string]any{"event": "telemetry_sink", "backend": "webhook"})
 	} else {
 		log.Info(map[string]any{"event": "telemetry_sink_pending", "detail": "no webhook URL yet; set it in Server Settings or DEVICE_WEBHOOK_URL"})
+	}
+
+	// Live video (HLS): wire the media manager + the host the device dials back
+	// for media frames. Disabled unless MEDIA_ADVERTISE_HOST is set.
+	var mediaMgr *media.Manager
+	if cfg.VideoEnabled() {
+		mediaMgr = media.NewManager(cfg.HLSRoot, cfg.FFmpegPath, log)
+		deps.Media = mediaMgr
+		deps.MediaAdvertiseHost = net.JoinHostPort(cfg.MediaAdvertiseHost, strconv.Itoa(cfg.MediaPort))
+		log.Info(map[string]any{"event": "video_enabled", "advertise": deps.MediaAdvertiseHost, "hls_root": cfg.HLSRoot})
+	} else {
+		log.Info(map[string]any{"event": "video_disabled", "detail": "MEDIA_ADVERTISE_HOST not set"})
 	}
 
 	proto := howen.New()
@@ -161,9 +175,27 @@ func main() {
 		if cfg.InternalAPIToken != "" {
 			log.Info(map[string]any{"event": "internal_token_enabled"})
 		}
+		if mediaMgr != nil {
+			api.SetHLSRoot(cfg.HLSRoot)
+		}
 		go func() {
 			if err := api.Run(ctx); err != nil {
 				log.Error(map[string]any{"event": "http_fatal", "error": err.Error()})
+			}
+		}()
+	}
+
+	// Media server: accepts the device's video connections (started by a
+	// stream command). Only runs when video is enabled.
+	if mediaMgr != nil {
+		ms := &howen.MediaServer{
+			Addr:    net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.MediaPort)),
+			Manager: mediaMgr,
+			Log:     log,
+		}
+		go func() {
+			if err := ms.ListenAndServe(ctx); err != nil {
+				log.Error(map[string]any{"event": "media_fatal", "error": err.Error()})
 			}
 		}()
 	}

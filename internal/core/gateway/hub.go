@@ -104,6 +104,18 @@ func (h *Hub) Get(serial string) (DeviceInfo, bool) {
 	return DeviceInfo{}, false
 }
 
+// Video returns the device's video controller, if its session supports video.
+func (h *Hub) Video(serial string) (VideoController, bool) {
+	h.mu.RLock()
+	e, ok := h.entries[serial]
+	h.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	vc, ok := e.commander.(VideoController)
+	return vc, ok
+}
+
 // Send dispatches a command to a connected device and returns its response.
 // Returns ErrNotConnected if the device is not currently connected.
 func (h *Hub) Send(ctx context.Context, serial string, cmd Command) (CommandResult, error) {

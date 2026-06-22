@@ -1,0 +1,227 @@
+// Package media runs live HLS streams. A protocol plugin feeds raw H.264 frames
+// for a stream id; the manager spawns one ffmpeg per stream that remuxes the
+// H.264 (no transcode, -c:v copy) into an HLS playlist + segments on disk, which
+// the HTTP API serves to a browser player.
+package media
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/dfm/device-gateway/internal/core/logging"
+)
+
+// Manager owns the set of active live streams.
+type Manager struct {
+	hlsRoot  string
+	ffmpeg   string
+	segDur   int // HLS segment duration (seconds)
+	listSize int // segments kept in the playlist
+	log      *logging.Logger
+
+	mu      sync.Mutex
+	streams map[string]*Stream
+}
+
+// NewManager constructs a media manager writing HLS under hlsRoot.
+func NewManager(hlsRoot, ffmpegPath string, log *logging.Logger) *Manager {
+	return &Manager{
+		hlsRoot:  hlsRoot,
+		ffmpeg:   ffmpegPath,
+		segDur:   2,
+		listSize: 6,
+		log:      log.With("media"),
+		streams:  map[string]*Stream{},
+	}
+}
+
+// HLSRoot is the directory HLS output is written under (served by the HTTP API).
+func (m *Manager) HLSRoot() string { return m.hlsRoot }
+
+// Stream is one live stream: an ffmpeg process fed H.264, producing HLS on disk.
+type Stream struct {
+	ID      string
+	Serial  string
+	Camera  int
+	Profile int
+	Dir     string // HLS output dir (<root>/<serial>/<camera>/<profile>)
+	Started time.Time
+
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	running bool // ffmpeg spawned
+	closed  bool
+	bytes   int64
+}
+
+// Register creates (or replaces) a stream entry and its output directory. ffmpeg
+// is started lazily on the first video frame, so a stream the device never
+// connects to costs nothing.
+func (m *Manager) Register(id, serial string, camera, profile int) (*Stream, error) {
+	dir := filepath.Join(m.hlsRoot, serial, strconv.Itoa(camera), strconv.Itoa(profile))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("media: mkdir %s: %w", dir, err)
+	}
+	// Clear stale segments/playlist from a previous run of this stream.
+	clearDir(dir)
+
+	m.mu.Lock()
+	if old := m.streams[id]; old != nil {
+		old.stop()
+	}
+	s := &Stream{ID: id, Serial: serial, Camera: camera, Profile: profile, Dir: dir, Started: time.Now()}
+	m.streams[id] = s
+	m.mu.Unlock()
+	m.log.Debug(map[string]any{"event": "stream_registered", "id": id, "serial": serial, "camera": camera, "profile": profile})
+	return s, nil
+}
+
+// Get returns a stream by id.
+func (m *Manager) Get(id string) (*Stream, bool) {
+	m.mu.Lock()
+	s, ok := m.streams[id]
+	m.mu.Unlock()
+	return s, ok
+}
+
+// WriteVideo appends an H.264 access-unit to a stream's ffmpeg input, starting
+// ffmpeg on the first frame. Returns an error if the stream is unknown/closed.
+func (m *Manager) WriteVideo(id string, h264 []byte) error {
+	s, ok := m.Get(id)
+	if !ok {
+		return fmt.Errorf("media: no stream %q", id)
+	}
+	return s.write(m, h264)
+}
+
+// Stop terminates a stream's ffmpeg and removes its output.
+func (m *Manager) Stop(id string) {
+	m.mu.Lock()
+	s := m.streams[id]
+	delete(m.streams, id)
+	m.mu.Unlock()
+	if s != nil {
+		s.stop()
+		clearDir(s.Dir)
+		m.log.Debug(map[string]any{"event": "stream_stopped", "id": id})
+	}
+}
+
+// Status reports a stream's liveness for the API.
+func (m *Manager) Status(id string) (map[string]any, bool) {
+	s, ok := m.Get(id)
+	if !ok {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return map[string]any{
+		"id": s.ID, "serial": s.Serial, "camera": s.Camera, "profile": s.Profile,
+		"active": s.running && !s.closed, "bytes": s.bytes,
+		"uptime_ms": time.Since(s.Started).Milliseconds(),
+	}, true
+}
+
+func (s *Stream) write(m *Manager, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("media: stream %q closed", s.ID)
+	}
+	if !s.running {
+		if err := s.spawn(m); err != nil {
+			return err
+		}
+		s.running = true
+	}
+	n, err := s.stdin.Write(data)
+	s.bytes += int64(n)
+	return err
+}
+
+// spawn starts ffmpeg: read Annex-B H.264 from stdin, copy the video into a
+// rolling HLS playlist (no re-encode).
+func (s *Stream) spawn(m *Manager) error {
+	playlist := filepath.Join(s.Dir, "stream.m3u8")
+	segments := filepath.Join(s.Dir, "seg_%03d.ts")
+	args := []string{
+		"-hide_banner", "-loglevel", "error",
+		"-fflags", "+genpts",
+		"-f", "h264", "-i", "pipe:0",
+		"-an", "-c:v", "copy",
+		"-f", "hls",
+		"-hls_time", strconv.Itoa(m.segDur),
+		"-hls_list_size", strconv.Itoa(m.listSize),
+		"-hls_flags", "delete_segments+independent_segments",
+		"-hls_segment_filename", segments,
+		playlist,
+	}
+	cmd := exec.Command(m.ffmpeg, args...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("media: ffmpeg stdin: %w", err)
+	}
+	cmd.Stderr = &lineLogger{log: m.log, id: s.ID}
+	if err := cmd.Start(); err != nil {
+		stdin.Close()
+		return fmt.Errorf("media: ffmpeg start (is %q installed?): %w", m.ffmpeg, err)
+	}
+	s.cmd = cmd
+	s.stdin = stdin
+	m.log.Info(map[string]any{"event": "ffmpeg_started", "id": s.ID, "pid": cmd.Process.Pid, "dir": s.Dir})
+	go func() {
+		err := cmd.Wait()
+		m.log.Debug(map[string]any{"event": "ffmpeg_exited", "id": s.ID, "error": errStr(err)})
+	}()
+	return nil
+}
+
+func (s *Stream) stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.stdin != nil {
+		s.stdin.Close()
+	}
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.cmd.Process.Kill()
+	}
+}
+
+// clearDir removes HLS artifacts (*.ts, *.m3u8) from a stream directory.
+func clearDir(dir string) {
+	for _, pat := range []string{"*.ts", "*.m3u8"} {
+		matches, _ := filepath.Glob(filepath.Join(dir, pat))
+		for _, f := range matches {
+			_ = os.Remove(f)
+		}
+	}
+}
+
+func errStr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// lineLogger forwards ffmpeg stderr to the structured log at debug level.
+type lineLogger struct {
+	log *logging.Logger
+	id  string
+}
+
+func (w *lineLogger) Write(p []byte) (int, error) {
+	w.log.Debug(map[string]any{"event": "ffmpeg", "id": w.id, "msg": string(p)})
+	return len(p), nil
+}

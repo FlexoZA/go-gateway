@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useFetch } from "@/lib/useFetch";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner, statusTone } from "@/components/ui";
 
@@ -45,6 +46,7 @@ export default function DashboardPage() {
                 <th className="th">Remote</th>
                 <th className="th">Connected</th>
                 <th className="th">Commands</th>
+                <th className="th text-right">Video</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-edge">
@@ -56,6 +58,11 @@ export default function DashboardPage() {
                   <td className="td text-slate-400">{fmt(u.connected_at)}</td>
                   <td className="td">
                     <Badge tone="slate">{u.commands?.length ?? 0} cmds</Badge>
+                  </td>
+                  <td className="td text-right">
+                    <Link href={`/live/${encodeURIComponent(u.serial)}`} className="btn-primary">
+                      Live view
+                    </Link>
                   </td>
                 </tr>
               ))}

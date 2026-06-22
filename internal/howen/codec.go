@@ -109,6 +109,30 @@ func readHowenFrameHeader(buf []byte) (frameHeader, error) {
 	}, nil
 }
 
+// mediaFrame is a decoded 0x0011 MEDIA_DATA payload: a 12-byte header
+// (mediaType uint16, channel uint16, timestamp uint64 ms — all little-endian)
+// followed by raw Annex-B H.264/H.265 (mediaType 1=keyframe, 2=frame, 3=audio).
+type mediaFrame struct {
+	MediaType int
+	Channel   int
+	Timestamp uint64
+	Data      []byte
+}
+
+func parseHowenMediaFrame(payload []byte) (mediaFrame, bool) {
+	if len(payload) < 12 {
+		return mediaFrame{}, false
+	}
+	return mediaFrame{
+		MediaType: int(binary.LittleEndian.Uint16(payload[0:2])),
+		Channel:   int(binary.LittleEndian.Uint16(payload[2:4])),
+		Timestamp: binary.LittleEndian.Uint64(payload[4:12]),
+		Data:      payload[12:],
+	}, true
+}
+
+func (f mediaFrame) isVideo() bool { return f.MediaType == 1 || f.MediaType == 2 }
+
 // ---- JSON payload ----
 
 // parseHowenJSONPayload strips the trailing null/newline padding and decodes the

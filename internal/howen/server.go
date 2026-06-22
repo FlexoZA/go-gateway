@@ -37,8 +37,9 @@ func New() *Protocol { return &Protocol{} }
 func (*Protocol) Name() string { return "howen" }
 
 func (*Protocol) Capabilities() gateway.Capabilities {
-	// Control commands are implemented; video/media arrives with a later milestone.
-	return gateway.Capabilities{HasVideo: false, HasCommands: true}
+	// Control commands and live video are implemented (video is active only when
+	// the gateway is configured with a media advertise host).
+	return gateway.Capabilities{HasVideo: true, HasCommands: true}
 }
 
 // ReadFrame decodes one H-Protocol frame from the stream.
@@ -118,9 +119,16 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		}
 		return nil
 
-	case msgLivePreviewResponse, msgPlaybackResponse, msgFileQueryResponse,
+	case msgLivePreviewResponse:
+		// Live-preview ack (0x1010) — route to the waiting StartLive/StopLive by ss.
+		if obj, err := parseHowenJSONObject(f.Payload); err == nil {
+			s.resolveDeviceAnswer(obj)
+		}
+		return nil
+
+	case msgPlaybackResponse, msgFileQueryResponse,
 		msgParamConfigResponse, msgSnapshotResponse, msgPlaybackEnd:
-		// Video/config responses: handled in later milestones.
+		// Other video/config responses: handled in later milestones.
 		log.Debug(map[string]any{"event": "command_response_ignored", "type": f.Type})
 		return nil
 

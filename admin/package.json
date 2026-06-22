@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "hls.js": "^1.5.17",
     "jose": "^5.9.6",
     "next": "14.2.18",
     "reactflow": "^11.11.4",

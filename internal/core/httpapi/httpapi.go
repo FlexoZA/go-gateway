@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -94,12 +95,17 @@ type Server struct {
 	data          DataStore
 	hub           *gateway.Hub
 	internalToken string
+	hlsRoot       string
 	srv           *http.Server
 }
 
 // SetInternalToken sets the shared secret the admin panel uses to authenticate
 // (accepted alongside DB API keys). Empty disables it.
 func (s *Server) SetInternalToken(token string) { s.internalToken = token }
+
+// SetHLSRoot enables HLS file serving (GET /api/hls/...) from dir. Empty disables
+// it (the route responds 404).
+func (s *Server) SetHLSRoot(dir string) { s.hlsRoot = dir }
 
 // New builds the API server. unit is this gateway's unit type (e.g. "howen"),
 // used as the default for mapping endpoints. If verifier is nil, protected
@@ -144,6 +150,11 @@ func New(host string, port int, unit string, verifier KeyVerifier, data DataStor
 		"GET /api/units":                    s.handleListUnits,
 		"GET /api/units/{serial}":           s.handleGetUnit,
 		"POST /api/units/{serial}/commands": s.handleCommand,
+
+		// Live video.
+		"POST /api/units/{serial}/stream/start": s.handleStreamStart,
+		"POST /api/units/{serial}/stream/stop":  s.handleStreamStop,
+		"GET /api/hls/":                         s.handleHLS,
 
 		// Device approval (registry, via the store).
 		"GET /api/devices":                   s.handleListDevices,
@@ -326,6 +337,98 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info(map[string]any{"event": "setup_completed", "email": strings.TrimSpace(body.Email)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "email": strings.TrimSpace(body.Email)})
+}
+
+// streamBody is the start/stop request: which camera + quality profile.
+type streamBody struct {
+	Camera  int `json:"camera"`  // 0-based camera index
+	Profile int `json:"profile"` // 0 = main (high), 1 = sub (low)
+}
+
+// POST /api/units/{serial}/stream/start — begin a live HLS stream.
+func (s *Server) handleStreamStart(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	vc, ok := s.hub.Video(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or video unavailable"})
+		return
+	}
+	var body streamBody
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	info, err := vc.StartLive(ctx, body.Camera, body.Profile)
+	if err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "session_id": info.SessionID, "hls_path": info.HLSPath,
+	})
+}
+
+// POST /api/units/{serial}/stream/stop — stop a live stream.
+func (s *Server) handleStreamStop(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	vc, ok := s.hub.Video(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or video unavailable"})
+		return
+	}
+	var body streamBody
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := vc.StopLive(ctx, body.Camera, body.Profile); err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) writeStreamError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, gateway.ErrCommandTimeout):
+		writeJSON(w, http.StatusGatewayTimeout, map[string]any{"error": "device did not start the stream in time"})
+	case strings.Contains(err.Error(), "not enabled"):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
+	case strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "not approved"):
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+	default:
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+	}
+}
+
+// GET /api/hls/<serial>/<camera>/<profile>/(stream.m3u8|seg_NNN.ts) — serve the
+// HLS playlist/segments produced by ffmpeg. API-key protected like everything
+// else; the admin panel proxies these so the browser player stays authenticated.
+func (s *Server) handleHLS(w http.ResponseWriter, r *http.Request) {
+	if s.hlsRoot == "" {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "video not enabled"})
+		return
+	}
+	switch path.Ext(r.URL.Path) {
+	case ".m3u8":
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Header().Set("Cache-Control", "no-cache")
+	case ".ts":
+		w.Header().Set("Content-Type", "video/mp2t")
+	}
+	http.StripPrefix("/api/hls/", http.FileServer(http.Dir(s.hlsRoot))).ServeHTTP(w, r)
 }
 
 // GET /api/users — list accounts (never password hashes).

@@ -17,9 +17,17 @@ COPY . .
 ARG UNIT=howen
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gateway ./cmd/${UNIT}
 
+# Static ffmpeg used to remux device H.264 into HLS for live video. It's a
+# self-contained static binary, so it runs on distroless/static and keeps the
+# image shell-less. (GPS-only unit types don't need it but the cost is small.)
+FROM mwader/static-ffmpeg:7.1 AS ffmpeg
+
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=build /out/gateway /gateway
-# Documentation only; ports are set via LISTEN_PORT/HTTP_PORT and mapped in compose.
-EXPOSE 33000 8080
+ENV FFMPEG_PATH=/usr/local/bin/ffmpeg
+# Documentation only; ports are set via env and mapped in compose.
+# 33000 control · 33001 media · 8080 HTTP API
+EXPOSE 33000 33001 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/gateway"]
