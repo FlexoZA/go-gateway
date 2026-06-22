@@ -25,11 +25,16 @@ async function handle(req: NextRequest, ctx: { params: { path?: string[] } }) {
     return NextResponse.json({ error: "gateway unreachable" }, { status: 502 });
   }
 
-  const text = await res.text();
-  return new NextResponse(text, {
-    status: res.status,
-    headers: { "Content-Type": res.headers.get("Content-Type") || "application/json" },
-  });
+  // Pass the body through as bytes — JSON *and* binary (HLS .ts video segments,
+  // which res.text() would corrupt). Forward the content-type and cache headers.
+  const headers = new Headers();
+  const ct = res.headers.get("Content-Type");
+  headers.set("Content-Type", ct || "application/json");
+  const cc = res.headers.get("Cache-Control");
+  if (cc) headers.set("Cache-Control", cc);
+
+  const body = await res.arrayBuffer();
+  return new NextResponse(body, { status: res.status, headers });
 }
 
 export const GET = handle;
