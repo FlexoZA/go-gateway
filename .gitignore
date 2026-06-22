@@ -2,6 +2,7 @@
 .env
 .env.local
 *.local.env
+local.env
 deploy/.env
 admin/.env
 admin/.env.local
@@ -12,7 +13,7 @@ admin/.env.local
 # --- Go build output ---
 /bin/
 /out/
-gateway
+/gateway
 *.test
 
 # --- Node / Next.js (admin app) ---

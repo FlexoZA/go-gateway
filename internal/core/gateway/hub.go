@@ -1,0 +1,117 @@
+package gateway
+
+import (
+	"context"
+	"errors"
+	"sort"
+	"sync"
+	"time"
+)
+
+// Command-dispatch errors. The HTTP API maps these to status codes.
+var (
+	ErrNotConnected       = errors.New("unit not connected")
+	ErrUnsupportedCommand = errors.New("unsupported command")
+	ErrInvalidCommand     = errors.New("invalid command")
+	ErrCommandTimeout     = errors.New("device response timeout")
+)
+
+// DeviceInfo is public metadata about a connected device.
+type DeviceInfo struct {
+	Serial      string    `json:"serial"`
+	Protocol    string    `json:"protocol"`
+	Model       string    `json:"model,omitempty"`
+	RemoteAddr  string    `json:"remote_addr"`
+	ConnectedAt time.Time `json:"connected_at"`
+	Commands    []string  `json:"commands"`
+}
+
+// Command is a control request to send to a device.
+type Command struct {
+	Type    string         `json:"type"`
+	Payload map[string]any `json:"payload,omitempty"`
+}
+
+// CommandResult is a device's response to a command.
+type CommandResult struct {
+	Data       map[string]any `json:"data"`
+	ReceivedAt time.Time      `json:"received_at"`
+}
+
+// Commander is implemented by a protocol session that can talk to its device.
+type Commander interface {
+	SendCommand(ctx context.Context, cmd Command) (CommandResult, error)
+	SupportedCommands() []string
+}
+
+// Hub is the registry of currently-connected devices. It is protocol-agnostic:
+// any unit-type session that supports commands registers itself, and the HTTP
+// API queries/commands through here. Safe for concurrent use.
+type Hub struct {
+	mu      sync.RWMutex
+	entries map[string]*hubEntry
+}
+
+type hubEntry struct {
+	info      DeviceInfo
+	commander Commander
+}
+
+// NewHub creates an empty hub.
+func NewHub() *Hub {
+	return &Hub{entries: map[string]*hubEntry{}}
+}
+
+// Register adds (or replaces) a connected device. The supported command list is
+// taken from the commander.
+func (h *Hub) Register(info DeviceInfo, c Commander) {
+	info.Commands = c.SupportedCommands()
+	h.mu.Lock()
+	h.entries[info.Serial] = &hubEntry{info: info, commander: c}
+	h.mu.Unlock()
+}
+
+// Unregister removes a device, but only if the registered commander is still the
+// given one (so a reconnect that replaced the entry is not clobbered by the old
+// connection's cleanup).
+func (h *Hub) Unregister(serial string, c Commander) {
+	h.mu.Lock()
+	if e, ok := h.entries[serial]; ok && e.commander == c {
+		delete(h.entries, serial)
+	}
+	h.mu.Unlock()
+}
+
+// List returns all connected devices, sorted by serial.
+func (h *Hub) List() []DeviceInfo {
+	h.mu.RLock()
+	out := make([]DeviceInfo, 0, len(h.entries))
+	for _, e := range h.entries {
+		out = append(out, e.info)
+	}
+	h.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Serial < out[j].Serial })
+	return out
+}
+
+// Get returns one device's info.
+func (h *Hub) Get(serial string) (DeviceInfo, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if e, ok := h.entries[serial]; ok {
+		return e.info, true
+	}
+	return DeviceInfo{}, false
+}
+
+// Send dispatches a command to a connected device and returns its response.
+// Returns ErrNotConnected if the device is not currently connected.
+func (h *Hub) Send(ctx context.Context, serial string, cmd Command) (CommandResult, error) {
+	h.mu.RLock()
+	e, ok := h.entries[serial]
+	h.mu.RUnlock()
+	if !ok {
+		return CommandResult{}, ErrNotConnected
+	}
+	return e.commander.SendCommand(ctx, cmd)
+}

@@ -1,0 +1,296 @@
+// Package gateway is the protocol-agnostic framework core. It runs the device
+// TCP accept loop, owns shared dependencies (config, logger, message builder,
+// data sinks, device authenticator), and dispatches decoded frames to a
+// unit-type plugin that implements Protocol. One gateway process serves exactly
+// one Protocol.
+package gateway
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/dfm/device-gateway/internal/core/config"
+	"github.com/dfm/device-gateway/internal/core/device"
+	"github.com/dfm/device-gateway/internal/core/logging"
+	"github.com/dfm/device-gateway/internal/core/message"
+)
+
+// Capabilities declares what a unit type supports. GPS-only trackers leave the
+// optional capabilities false so no video/command code is wired in.
+type Capabilities struct {
+	HasVideo    bool
+	HasCommands bool
+}
+
+// Frame is one decoded protocol message.
+type Frame struct {
+	Type    int
+	Payload []byte
+}
+
+// Protocol is the contract a unit-type plugin implements. To add a new server,
+// implement this interface and point a cmd/<unit>/main.go at it.
+type Protocol interface {
+	// Name is the unit type, e.g. "howen". Surfaced in logs and webhook fields.
+	Name() string
+	// Capabilities declares optional features.
+	Capabilities() Capabilities
+	// ReadFrame decodes exactly one frame from the buffered connection stream.
+	// It must return io.EOF when the peer closes cleanly.
+	ReadFrame(r *bufio.Reader) (Frame, error)
+	// NewSession creates per-connection protocol state.
+	NewSession(c *Conn) Session
+}
+
+// Session handles the frames of a single connection.
+type Session interface {
+	// OnFrame processes one frame. Returning an error closes the connection.
+	OnFrame(ctx context.Context, f Frame) error
+	// OnClose runs once when the connection ends.
+	OnClose(ctx context.Context)
+}
+
+// Sink consumes a built universal message (e.g. PostgreSQL, webhook). A message
+// is built once and handed to every configured sink, so the per-device seq_no is
+// incremented exactly once regardless of how many sinks are active.
+type Sink interface {
+	Consume(ctx context.Context, in message.Inbound, msg message.Universal) error
+}
+
+// DeviceErrorRecorder persists an error a device reported over its connection
+// (e.g. a media/clip/event upload failure). The signature is primitives only so
+// the storage layer satisfies it structurally, without importing this package.
+// Implemented by *postgres.Store.
+type DeviceErrorRecorder interface {
+	RecordDeviceError(ctx context.Context, serial, category, message, remoteAddr string, remotePort int, raw []byte) error
+}
+
+// Deps bundles the shared dependencies handed to each connection.
+type Deps struct {
+	Config  config.Config
+	Log     *logging.Logger
+	Builder *message.Builder
+	Sinks   []Sink
+	Auth    device.Authenticator
+	// Hub tracks connected devices for the HTTP control API. May be nil when the
+	// HTTP API is disabled; sessions must nil-check before registering.
+	Hub *Hub
+	// DeviceErrors persists device-reported errors. May be nil (no database);
+	// Conn.EmitDeviceError nil-checks before using it.
+	DeviceErrors DeviceErrorRecorder
+}
+
+// Conn wraps a device socket with framework dependencies.
+type Conn struct {
+	net.Conn
+	Deps   Deps
+	writeM sync.Mutex
+}
+
+// WriteFrame writes raw bytes to the device, serialized against concurrent
+// writers (command paths may write outside the read goroutine).
+func (c *Conn) WriteFrame(b []byte) error {
+	c.writeM.Lock()
+	defer c.writeM.Unlock()
+	_, err := c.Conn.Write(b)
+	return err
+}
+
+// RemoteIP returns the peer IP without the port.
+func (c *Conn) RemoteIP() string {
+	host, _, err := net.SplitHostPort(c.RemoteAddr().String())
+	if err != nil {
+		return c.RemoteAddr().String()
+	}
+	return host
+}
+
+// RemotePort returns the peer TCP port (0 if unknown).
+func (c *Conn) RemotePort() int {
+	if tcp, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+		return tcp.Port
+	}
+	return 0
+}
+
+// LocalIP returns the local IP the device connected to.
+func (c *Conn) LocalIP() string {
+	host, _, err := net.SplitHostPort(c.LocalAddr().String())
+	if err != nil {
+		return c.LocalAddr().String()
+	}
+	return host
+}
+
+// Emit builds the universal message from a normalized payload once and delivers
+// it to every configured sink asynchronously (fire-and-forget) so the read loop
+// is never blocked. Every protocol plugin uses this single path — there is no
+// per-unit storage code.
+//
+// msgType is "gps" or "event"; payload is the normalized field map the universal
+// builder understands (latitude, longitude, speed, event, etc.).
+func (c *Conn) Emit(serial, make, model, msgType string, payload map[string]any) {
+	in := message.Inbound{
+		Serial:     serial,
+		Make:       make,
+		Model:      model,
+		Type:       msgType,
+		Port:       c.Deps.Config.ListenPort,
+		Network:    message.Network{RemoteAddress: c.RemoteIP(), RemotePort: c.RemotePort()},
+		Payload:    payload,
+		ReceivedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+	}
+	msg := c.Deps.Builder.Build(in)
+	log := c.Deps.Log
+	for _, sink := range c.Deps.Sinks {
+		sink := sink
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			if err := sink.Consume(ctx, in, msg); err != nil {
+				log.Debug(map[string]any{"event": "sink_error", "type": msgType, "error": err.Error()})
+			}
+		}()
+	}
+}
+
+// EmitDeviceError persists an error a device reported over this connection,
+// fire-and-forget so the read loop is never blocked. Remote address/port are
+// taken from the connection. No-op when no device-error recorder is configured
+// (e.g. no database). category may be empty; raw is the original payload (stored
+// as JSONB when it is valid JSON) and may be nil.
+func (c *Conn) EmitDeviceError(serial, category, message string, raw []byte) {
+	rec := c.Deps.DeviceErrors
+	if rec == nil {
+		return
+	}
+	remoteAddr, remotePort := c.RemoteIP(), c.RemotePort()
+	log := c.Deps.Log
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := rec.RecordDeviceError(ctx, serial, category, message, remoteAddr, remotePort, raw); err != nil {
+			log.Debug(map[string]any{"event": "device_error_persist_failed", "serial": serial, "error": err.Error()})
+		}
+	}()
+}
+
+// Server binds a Protocol to a listening socket.
+type Server struct {
+	proto       Protocol
+	deps        Deps
+	idleTimeout time.Duration
+}
+
+// New constructs a Server for the given protocol and dependencies.
+func New(proto Protocol, deps Deps) *Server {
+	return &Server{proto: proto, deps: deps, idleTimeout: 3 * time.Minute}
+}
+
+// SetIdleTimeout overrides the per-connection idle timeout.
+func (s *Server) SetIdleTimeout(d time.Duration) { s.idleTimeout = d }
+
+// ListenAndServe binds the configured host:port and serves until ctx is done.
+func (s *Server) ListenAndServe(ctx context.Context) error {
+	addr := net.JoinHostPort(s.deps.Config.ListenHost, itoa(s.deps.Config.ListenPort))
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	s.deps.Log.Info(map[string]any{
+		"event": "listening", "host": s.deps.Config.ListenHost,
+		"port": s.deps.Config.ListenPort, "unit": s.proto.Name(),
+		"capabilities": s.proto.Capabilities(),
+	})
+	return s.Serve(ctx, ln)
+}
+
+// Serve runs the accept loop on a caller-provided listener until ctx is done.
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	go func() {
+		<-ctx.Done()
+		ln.Close()
+	}()
+
+	var wg sync.WaitGroup
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				wg.Wait()
+				return nil
+			}
+			s.deps.Log.Error(map[string]any{"event": "accept_error", "error": err.Error()})
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.handle(ctx, conn)
+		}()
+	}
+}
+
+func (s *Server) handle(ctx context.Context, raw net.Conn) {
+	if tcp, ok := raw.(*net.TCPConn); ok {
+		_ = tcp.SetKeepAlive(true)
+		_ = tcp.SetKeepAlivePeriod(30 * time.Second)
+	}
+	conn := &Conn{Conn: raw, Deps: s.deps}
+	log := s.deps.Log
+	log.Debug(map[string]any{"event": "connection", "remote": conn.RemoteAddr().String()})
+
+	sess := s.proto.NewSession(conn)
+	defer sess.OnClose(ctx)
+	defer raw.Close()
+
+	r := bufio.NewReader(raw)
+	for {
+		if s.idleTimeout > 0 {
+			_ = raw.SetReadDeadline(time.Now().Add(s.idleTimeout))
+		}
+		frame, err := s.proto.ReadFrame(r)
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				log.Debug(map[string]any{"event": "peer_closed"})
+			} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				log.Debug(map[string]any{"event": "idle_timeout"})
+			} else {
+				log.Debug(map[string]any{"event": "read_error", "error": err.Error()})
+			}
+			return
+		}
+		if err := sess.OnFrame(ctx, frame); err != nil {
+			log.Debug(map[string]any{"event": "frame_error", "error": err.Error()})
+			return
+		}
+	}
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		b[i] = '-'
+	}
+	return string(b[i:])
+}
