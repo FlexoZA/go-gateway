@@ -136,9 +136,7 @@ export const SEGMENTS: Record<string, SegmentMeta> = {
   LANGUAGE: {
     label: "Language & voice",
     fields: {
-      lang: { label: "Language", type: "select", options: [
-        { value: "0", label: "Chinese" }, { value: "1", label: "English" },
-      ] },
+      lang: { label: "Language code", type: "number" }, // device-specific index; left raw (mapping unverified)
       VoiceOnOff: { label: "Voice prompts", ...onOff },
       VoiceVolume: { label: "Volume", type: "number" },
       UpgradeVoice: { label: "Upgrade voice", ...onOff },
