@@ -14,15 +14,21 @@ var (
 	ErrUnsupportedCommand = errors.New("unsupported command")
 	ErrInvalidCommand     = errors.New("invalid command")
 	ErrCommandTimeout     = errors.New("device response timeout")
+	// ErrDeviceSleeping means the device is connected but in standby and won't
+	// service video/playback until woken.
+	ErrDeviceSleeping = errors.New("device is in standby")
 )
 
-// DeviceInfo is public metadata about a connected device.
+// DeviceInfo is public metadata about a connected device. State is the live
+// connection state: "online" (awake) or "sleep" (standby) — a connected device
+// in standby won't service video/playback until woken.
 type DeviceInfo struct {
 	Serial      string    `json:"serial"`
 	Protocol    string    `json:"protocol"`
 	Model       string    `json:"model,omitempty"`
 	RemoteAddr  string    `json:"remote_addr"`
 	ConnectedAt time.Time `json:"connected_at"`
+	State       string    `json:"state"`
 	Commands    []string  `json:"commands"`
 }
 
@@ -66,6 +72,9 @@ func NewHub() *Hub {
 // taken from the commander.
 func (h *Hub) Register(info DeviceInfo, c Commander) {
 	info.Commands = c.SupportedCommands()
+	if info.State == "" {
+		info.State = "online"
+	}
 	h.mu.Lock()
 	h.entries[info.Serial] = &hubEntry{info: info, commander: c}
 	h.mu.Unlock()
@@ -73,11 +82,24 @@ func (h *Hub) Register(info DeviceInfo, c Commander) {
 
 // Unregister removes a device, but only if the registered commander is still the
 // given one (so a reconnect that replaced the entry is not clobbered by the old
-// connection's cleanup).
-func (h *Hub) Unregister(serial string, c Commander) {
+// connection's cleanup). Returns true if it actually removed this session — the
+// caller uses that to avoid marking a reconnected device offline.
+func (h *Hub) Unregister(serial string, c Commander) bool {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	if e, ok := h.entries[serial]; ok && e.commander == c {
 		delete(h.entries, serial)
+		return true
+	}
+	return false
+}
+
+// SetState updates a connected device's live state (online/sleep), but only if
+// the given commander is still the registered one (ignores stale sessions).
+func (h *Hub) SetState(serial string, c Commander, state string) {
+	h.mu.Lock()
+	if e, ok := h.entries[serial]; ok && e.commander == c {
+		e.info.State = state
 	}
 	h.mu.Unlock()
 }

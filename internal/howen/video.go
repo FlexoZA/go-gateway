@@ -113,6 +113,9 @@ func (s *session) RequestClip(ctx context.Context, req gateway.ClipRequest) (gat
 	if s.gate != gateApproved {
 		return gateway.ClipInfo{}, errors.New("device not approved")
 	}
+	if s.lifecycle == "sleep" {
+		return gateway.ClipInfo{}, gateway.ErrDeviceSleeping
+	}
 	if req.Camera < 0 || req.Profile < 0 || req.Profile > 1 {
 		return gateway.ClipInfo{}, errors.New("invalid camera/profile")
 	}

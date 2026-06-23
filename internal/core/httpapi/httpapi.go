@@ -451,8 +451,10 @@ func (s *Server) handleStreamStop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeStreamError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, gateway.ErrDeviceSleeping):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "device is in standby — wake it first", "code": "device_sleeping"})
 	case errors.Is(err, gateway.ErrCommandTimeout):
-		writeJSON(w, http.StatusGatewayTimeout, map[string]any{"error": "device did not start the stream in time"})
+		writeJSON(w, http.StatusGatewayTimeout, map[string]any{"error": "device did not respond in time (it may be in standby)"})
 	case strings.Contains(err.Error(), "not enabled"):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
 	case strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "not approved"):

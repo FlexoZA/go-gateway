@@ -69,6 +69,9 @@ func (s *session) QueryRecordings(ctx context.Context, camera, profile int, star
 	if s.gate != gateApproved {
 		return nil, errors.New("device not approved")
 	}
+	if s.lifecycle == "sleep" {
+		return nil, gateway.ErrDeviceSleeping
+	}
 	if profile < 0 || profile > 1 {
 		return nil, errors.New("invalid profile")
 	}

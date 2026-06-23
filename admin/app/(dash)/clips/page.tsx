@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 
-type Unit = { serial: string; model: string };
+type Unit = { serial: string; model: string; state?: string };
 type Recording = {
   camera: number;
   profile: number;
@@ -81,6 +81,28 @@ export default function ClipsPage() {
   const unitList = units.data?.units ?? [];
   const clipList = clips.data?.clips ?? [];
   const effectiveSerial = serial || unitList[0]?.serial || "";
+  const selectedUnit = unitList.find((u) => u.serial === effectiveSerial);
+  const sleeping = selectedUnit?.state === "sleep";
+  const [waking, setWaking] = useState(false);
+
+  async function wakeDevice() {
+    if (!effectiveSerial) return;
+    setWaking(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await api(`units/${encodeURIComponent(effectiveSerial)}/commands`, {
+        method: "POST",
+        body: JSON.stringify({ type: "wake_device" }),
+      });
+      setNotice("Wake sent. Give the device a few seconds to come out of standby, then search again.");
+      await units.refresh();
+    } catch (e: any) {
+      setError(e.message || "Failed to wake device");
+    } finally {
+      setWaking(false);
+    }
+  }
 
   async function findRecordings() {
     setError(null);
@@ -150,6 +172,14 @@ export default function ClipsPage() {
       <PageHeader title="Clips" subtitle="Find footage on a device's SD card and store it on the server" />
       <ErrorBanner message={error || units.error || clips.error} />
       {notice && <div className="mb-4 rounded-md border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200">{notice}</div>}
+      {sleeping && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+          <span>⚠ {effectiveSerial} is in <strong>standby</strong> — it won&apos;t return recordings or clips until woken.</span>
+          <button className="btn-primary" onClick={wakeDevice} disabled={waking}>
+            {waking ? "Waking…" : "Wake device"}
+          </button>
+        </div>
+      )}
 
       {/* Step 1: search the device for available recordings */}
       <div className="card mb-6 space-y-3">

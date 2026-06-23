@@ -10,6 +10,7 @@ type Unit = {
   model?: string;
   remote_addr: string;
   connected_at: string;
+  state?: string;
   commands: string[];
 };
 
@@ -19,16 +20,18 @@ export default function DashboardPage() {
   const pending = useFetch<{ devices: any[] }>("devices/pending", 10000);
 
   const connected = units.data?.units ?? [];
+  const standby = connected.filter((u) => u.state === "sleep").length;
 
   return (
     <div>
       <PageHeader title="Dashboard" subtitle="Live connectivity and registry overview" />
       <ErrorBanner message={units.error} />
 
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Stat label="Connected now" value={connected.length} tone="green" />
-        <Stat label="Approved devices" value={devices.data?.devices?.length ?? "—"} tone="indigo" />
-        <Stat label="Pending approval" value={pending.data?.devices?.length ?? "—"} tone="amber" />
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Stat label="Connected now" value={connected.length} tone="green" badge="live" />
+        <Stat label="In standby" value={standby} tone="amber" badge="sleep" />
+        <Stat label="Approved devices" value={devices.data?.devices?.length ?? "—"} tone="indigo" badge="registry" />
+        <Stat label="Pending approval" value={pending.data?.devices?.length ?? "—"} tone="amber" badge="pending" />
       </div>
 
       <h2 className="mb-3 text-sm font-semibold text-slate-300">Connected devices</h2>
@@ -43,6 +46,7 @@ export default function DashboardPage() {
               <tr>
                 <th className="th">Serial</th>
                 <th className="th">Model</th>
+                <th className="th">State</th>
                 <th className="th">Remote</th>
                 <th className="th">Connected</th>
                 <th className="th">Commands</th>
@@ -54,6 +58,9 @@ export default function DashboardPage() {
                 <tr key={u.serial}>
                   <td className="td font-mono">{u.serial}</td>
                   <td className="td">{u.model || "—"}</td>
+                  <td className="td">
+                    {u.state === "sleep" ? <Badge tone="amber">standby</Badge> : <Badge tone="green">online</Badge>}
+                  </td>
                   <td className="td font-mono text-slate-400">{u.remote_addr}</td>
                   <td className="td text-slate-400">{fmt(u.connected_at)}</td>
                   <td className="td">
@@ -74,13 +81,13 @@ export default function DashboardPage() {
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: number | string; tone: "green" | "amber" | "indigo" }) {
+function Stat({ label, value, tone, badge }: { label: string; value: number | string; tone: "green" | "amber" | "indigo"; badge: string }) {
   return (
     <div className="card">
       <div className="text-xs uppercase tracking-wide text-slate-400">{label}</div>
       <div className="mt-2 flex items-baseline gap-2">
         <span className="text-2xl font-semibold text-white">{value}</span>
-        <Badge tone={tone}>live</Badge>
+        <Badge tone={tone}>{badge}</Badge>
       </div>
     </div>
   );

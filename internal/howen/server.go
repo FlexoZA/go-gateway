@@ -173,15 +173,21 @@ func (s *session) OnClose(ctx context.Context) {
 	if s.serial == "" || s.gate != gateApproved {
 		return
 	}
+	// Only mark the registry offline if this session is still the live one. On a
+	// reconnect the new session has already replaced this one in the Hub (and set
+	// the registry online); a late close of the old socket must not undo that.
+	current := true
 	if s.conn.Deps.Hub != nil {
-		s.conn.Deps.Hub.Unregister(s.serial, s)
+		current = s.conn.Deps.Hub.Unregister(s.serial, s)
 	}
-	if err := s.conn.Deps.Auth.UpdateStatus(ctx, s.serial, "offline"); err != nil {
-		s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{
-			"event": "device_status_update_failed", "serial": s.serial, "status": "offline", "error": err.Error(),
-		})
+	if current {
+		if err := s.conn.Deps.Auth.UpdateStatus(ctx, s.serial, "offline"); err != nil {
+			s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{
+				"event": "device_status_update_failed", "serial": s.serial, "status": "offline", "error": err.Error(),
+			})
+		}
 	}
-	s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{"event": "close", "serial": s.serial})
+	s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{"event": "close", "serial": s.serial, "current": current})
 }
 
 func (s *session) handleRegistration(ctx context.Context, payload []byte) error {
@@ -253,6 +259,7 @@ func (s *session) handleRegistration(ctx context.Context, payload []byte) error 
 			Model:       s.model,
 			RemoteAddr:  s.conn.RemoteAddr().String(),
 			ConnectedAt: time.Now().UTC(),
+			State:       "online",
 		}, s)
 	}
 	log.Info(map[string]any{"event": "device_approved", "serial": s.serial, "protocol": result.Protocol})
@@ -326,6 +333,9 @@ func (s *session) reconcileLifecycle(ctx context.Context, status *howenStatusDat
 		return
 	}
 	s.lifecycle = desired
+	if s.conn.Deps.Hub != nil {
+		s.conn.Deps.Hub.SetState(s.serial, s, desired)
+	}
 	if err := s.conn.Deps.Auth.UpdateStatus(ctx, s.serial, desired); err != nil {
 		s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{
 			"event": "device_status_update_failed", "serial": s.serial, "status": desired, "error": err.Error(),
