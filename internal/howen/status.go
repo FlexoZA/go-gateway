@@ -23,18 +23,18 @@ func (s *session) Status() (map[string]any, bool) {
 	return buildStatusSnapshot(sd, at), true
 }
 
+// diskStatusLabel maps the H-Protocol storage status byte (0=none, 1=normal,
+// 2=abnormal, 3=full). A real device with free space reports 1.
 func diskStatusLabel(v int) string {
 	switch v {
 	case 0:
-		return "ok"
+		return "none"
 	case 1:
-		return "error"
+		return "ok"
 	case 2:
-		return "full"
+		return "error"
 	case 3:
-		return "not_present"
-	case 4:
-		return "formatting"
+		return "full"
 	default:
 		return strconv.Itoa(v)
 	}

@@ -200,7 +200,7 @@ function KV({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) {
   );
 }
 function Health({ v }: { v: string }) {
-  const tone = v === "normal" || v === "ok" ? "green" : v === "abnormal" || v === "error" || v === "full" ? "rose" : v === "not_exist" || v === "not_present" ? "slate" : "amber";
+  const tone = v === "normal" || v === "ok" ? "green" : v === "abnormal" || v === "error" || v === "full" ? "rose" : v === "not_exist" || v === "none" ? "slate" : "amber";
   return <Badge tone={tone as any}>{v}</Badge>;
 }
 function Flag({ on, label, warn }: { on: boolean; label: string; warn?: boolean }) {
