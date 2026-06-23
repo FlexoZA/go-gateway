@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { useFetch } from "@/lib/useFetch";
 import { Badge, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
+import { DeviceConfig } from "@/components/DeviceConfig";
 
 type Conn = {
   serial: string;
@@ -27,6 +29,7 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
   const reg = devices.data?.devices?.find((d) => d.serial === serial);
   const online = !!conn;
   const state = conn?.state === "sleep" ? "standby" : online ? "online" : reg?.status || "offline";
+  const [tab, setTab] = useState<"status" | "config">("status");
 
   return (
     <div>
@@ -46,13 +49,40 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
       />
       <ErrorBanner message={devices.error} />
 
-      {!online && (
-        <div className="mb-6 rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
-          This device is not currently connected — showing registry info only. Live status appears when it connects.
-        </div>
-      )}
+      {/* Status | Config tabs */}
+      <div className="mb-5 flex gap-1 border-b border-edge">
+        {(["status", "config"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm capitalize ${
+              tab === t ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+            disabled={t === "config" && !online}
+            title={t === "config" && !online ? "Connect the device to edit its configuration" : undefined}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {tab === "config" ? (
+        online ? (
+          <DeviceConfig serial={serial} />
+        ) : (
+          <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
+            The device must be connected to read or edit its configuration.
+          </div>
+        )
+      ) : (
+        <>
+          {!online && (
+            <div className="mb-6 rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
+              This device is not currently connected — showing registry info only. Live status appears when it connects.
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Connection / server */}
         <Card title="Server connection">
           <KV k="State" v={<Badge tone={state === "online" ? "green" : state === "standby" ? "amber" : "slate"}>{state}</Badge>} />
@@ -174,10 +204,12 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
         )}
       </div>
 
-      {online && !tele?.network && !tele?.location && !tele?.vehicle && (
-        <div className="mt-4 text-sm text-slate-400">
-          {status.loading ? <Spinner /> : "Connected — waiting for the device's first status report…"}
-        </div>
+          {online && !tele?.network && !tele?.location && !tele?.vehicle && (
+            <div className="mt-4 text-sm text-slate-400">
+              {status.loading ? <Spinner /> : "Connected — waiting for the device's first status report…"}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
