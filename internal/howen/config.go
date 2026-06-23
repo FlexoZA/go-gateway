@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dfm/device-gateway/internal/core/gateway"
 )
@@ -29,7 +30,9 @@ type configCollector struct {
 	err    error
 	done   chan struct{}
 	once   sync.Once
-	expect bool // true = GET (wait for all wanted segments); false = SET (any reply ends it)
+	expect bool          // true = GET (wait for wanted segments); false = SET (any reply ends it)
+	grace  time.Duration // debounce window for trailing frames (GET)
+	timer  *time.Timer   // fires finish() once frames stop arriving (segments the device lacks never come)
 }
 
 func (c *configCollector) finish(err error) {
@@ -37,6 +40,9 @@ func (c *configCollector) finish(err error) {
 		c.mu.Lock()
 		if err != nil {
 			c.err = err
+		}
+		if c.timer != nil {
+			c.timer.Stop()
 		}
 		c.mu.Unlock()
 		close(c.done)
@@ -63,11 +69,18 @@ func (s *session) collectParamConfig(obj map[string]any) {
 		delete(c.want, strings.ToLower(k))
 	}
 	remaining := len(c.want)
+	// SET: any non-error reply ends it. GET: finish once all requested segments
+	// arrived, else debounce — the device silently omits segments it doesn't have,
+	// so complete with whatever we got once frames stop arriving.
+	done := !c.expect || remaining == 0
+	if !done {
+		if c.timer != nil {
+			c.timer.Stop()
+		}
+		c.timer = time.AfterFunc(c.grace, func() { c.finish(nil) })
+	}
 	c.mu.Unlock()
-
-	// GET completes once every requested (known) segment has arrived; SET has no
-	// segments to wait for, so the first non-error reply ends it.
-	if !c.expect || remaining == 0 {
+	if done {
 		c.finish(nil)
 	}
 }
@@ -86,6 +99,7 @@ func (s *session) runConfig(ctx context.Context, sc map[string]any, want []strin
 		sc:     map[string]any{},
 		done:   make(chan struct{}),
 		expect: expect,
+		grace:  1500 * time.Millisecond,
 	}
 	for _, m := range want {
 		c.want[strings.ToLower(m)] = true
