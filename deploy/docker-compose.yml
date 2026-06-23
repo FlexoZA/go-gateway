@@ -11,8 +11,10 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-gateway}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # Not published to the host: the gateway reaches Postgres over the compose
+    # network. Publishing 5432 only invites port conflicts (e.g. another stack's
+    # Postgres on the same box). Add a ports mapping yourself if you need external
+    # DB access for debugging.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gateway} -d ${POSTGRES_DB:-gateway}"]
       interval: 5s
