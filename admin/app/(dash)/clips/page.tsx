@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
@@ -57,6 +57,27 @@ export default function ClipsPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  // Trim state: which recording is open for trimming, and the chosen sub-window
+  // (offset seconds into the recording + length seconds). Howen serves arbitrary
+  // sub-windows, so you can pull just a section instead of the whole file.
+  const [trimKey, setTrimKey] = useState<string | null>(null);
+  const [offsetSecs, setOffsetSecs] = useState(0);
+  const [lengthSecs, setLengthSecs] = useState(30);
+  const MAX_CLIP_SECS = 300; // device cap (matches the old admin)
+  const MIN_CLIP_SECS = 5;
+
+  function recKey(rec: Recording) {
+    return `${rec.start_utc}-${rec.end_utc}`;
+  }
+  function openTrim(rec: Recording) {
+    const len = rec.end_utc - rec.start_utc;
+    setTrimKey(recKey(rec));
+    setOffsetSecs(0);
+    setLengthSecs(Math.min(30, len));
+    setError(null);
+    setNotice(null);
+  }
+
   const unitList = units.data?.units ?? [];
   const clipList = clips.data?.clips ?? [];
   const effectiveSerial = serial || unitList[0]?.serial || "";
@@ -91,17 +112,21 @@ export default function ClipsPage() {
     }
   }
 
-  async function requestClip(rec: Recording) {
+  // requestClip pulls a window from a recording. Without a window it pulls the
+  // whole file; with one it pulls just that trimmed section.
+  async function requestClip(rec: Recording, startUtc?: number, endUtc?: number) {
     setError(null);
     setNotice(null);
-    const key = `${rec.start_utc}-${rec.end_utc}`;
-    setRequesting(key);
+    const start = startUtc ?? rec.start_utc;
+    const end = endUtc ?? rec.end_utc;
+    setRequesting(recKey(rec));
     try {
       await api(`units/${encodeURIComponent(effectiveSerial)}/clips`, {
         method: "POST",
-        body: JSON.stringify({ camera: rec.camera, profile: rec.profile, start_utc: rec.start_utc, end_utc: rec.end_utc }),
+        body: JSON.stringify({ camera: rec.camera, profile: rec.profile, start_utc: start, end_utc: end }),
       });
       setNotice("Clip requested — the device is uploading it. It will appear in Stored clips below.");
+      setTrimKey(null);
       await clips.refresh();
     } catch (e: any) {
       setError(e.message || "Failed to request clip");
@@ -184,21 +209,82 @@ export default function ClipsPage() {
             </thead>
             <tbody className="divide-y divide-edge">
               {recordings.map((rec) => {
-                const key = `${rec.start_utc}-${rec.end_utc}`;
+                const key = recKey(rec);
+                const recLen = rec.end_utc - rec.start_utc;
+                const open = trimKey === key;
+                // Clamp the chosen sub-window to the recording bounds.
+                const maxOffset = Math.max(0, recLen - MIN_CLIP_SECS);
+                const off = Math.min(Math.max(0, offsetSecs), maxOffset);
+                const maxLen = Math.min(MAX_CLIP_SECS, recLen - off);
+                const len = Math.min(Math.max(MIN_CLIP_SECS, lengthSecs), maxLen);
+                const winStart = rec.start_utc + off;
+                const winEnd = winStart + len;
                 return (
-                  <tr key={key}>
-                    <td className="td font-mono">{rec.device_start || fmtUtc(rec.start_utc)}</td>
-                    <td className="td font-mono text-slate-400">{rec.device_end || fmtUtc(rec.end_utc)}</td>
-                    <td className="td text-slate-400">{rec.end_utc - rec.start_utc}s</td>
-                    <td className="td text-slate-400">{fmtBytes(rec.size)}</td>
-                    <td className="td">
-                      <div className="flex justify-end">
-                        <button className="btn-primary" disabled={requesting === key} onClick={() => requestClip(rec)}>
-                          {requesting === key ? "Requesting…" : "Pull clip"}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                  <Fragment key={key}>
+                    <tr className={open ? "bg-edge/40" : undefined}>
+                      <td className="td font-mono">{rec.device_start || fmtUtc(rec.start_utc)}</td>
+                      <td className="td font-mono text-slate-400">{rec.device_end || fmtUtc(rec.end_utc)}</td>
+                      <td className="td text-slate-400">{recLen}s</td>
+                      <td className="td text-slate-400">{fmtBytes(rec.size)}</td>
+                      <td className="td">
+                        <div className="flex justify-end gap-2">
+                          <button className="btn-ghost" onClick={() => (open ? setTrimKey(null) : openTrim(rec))}>
+                            {open ? "Close" : "Trim"}
+                          </button>
+                          <button className="btn-primary" disabled={requesting === key} onClick={() => requestClip(rec)}>
+                            {requesting === key ? "Requesting…" : "Pull full"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {open && (
+                      <tr className="bg-edge/40">
+                        <td className="td" colSpan={5}>
+                          <div className="flex flex-wrap items-end gap-4">
+                            <div>
+                              <label className="text-xs text-slate-400">Start at (seconds in)</label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={maxOffset}
+                                className="input mt-1 w-28"
+                                value={off}
+                                onChange={(e) => setOffsetSecs(Number(e.target.value))}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-400">Length (seconds, max {Math.min(MAX_CLIP_SECS, recLen)})</label>
+                              <input
+                                type="number"
+                                min={MIN_CLIP_SECS}
+                                max={maxLen}
+                                className="input mt-1 w-28"
+                                value={len}
+                                onChange={(e) => setLengthSecs(Number(e.target.value))}
+                              />
+                            </div>
+                            <div className="flex gap-1">
+                              {[10, 30, 60, 120, 300].filter((s) => s <= Math.min(MAX_CLIP_SECS, recLen)).map((s) => (
+                                <button key={s} className="btn-ghost px-2 py-1 text-xs" onClick={() => setLengthSecs(s)}>
+                                  {s < 60 ? `${s}s` : `${s / 60}m`}
+                                </button>
+                              ))}
+                            </div>
+                            <div className="text-xs text-slate-400">
+                              → {fmtUtc(winStart)} for {len}s
+                            </div>
+                            <button
+                              className="btn-primary"
+                              disabled={requesting === key}
+                              onClick={() => requestClip(rec, winStart, winEnd)}
+                            >
+                              {requesting === key ? "Requesting…" : "Pull section"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
