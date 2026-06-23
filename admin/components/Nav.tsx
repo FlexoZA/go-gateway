@@ -7,6 +7,7 @@ import { logout } from "@/lib/api";
 const links = [
   { href: "/", label: "Dashboard" },
   { href: "/devices", label: "Devices" },
+  { href: "/clips", label: "Clips" },
   { href: "/device-mapping", label: "Device Mapping" },
   { href: "/server-settings", label: "Server Settings" },
   { href: "/users", label: "Users" },

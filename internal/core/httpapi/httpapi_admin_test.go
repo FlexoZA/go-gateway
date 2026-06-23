@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,6 +94,13 @@ func (f *fakeData) SetSetting(_ context.Context, key, value string) error {
 func (f *fakeData) ListWebhooks(context.Context) ([]map[string]any, error) {
 	return []map[string]any{{"id": int64(1), "name": "default", "url": "https://db/x", "is_enabled": true}}, nil
 }
+func (f *fakeData) ListClips(context.Context, string, int, int) ([]map[string]any, error) {
+	return []map[string]any{}, nil
+}
+func (f *fakeData) GetClip(context.Context, int64) (map[string]any, error) {
+	return nil, errors.New(notFoundMsg)
+}
+func (f *fakeData) DeleteClip(context.Context, int64) (string, error) { return "", nil }
 func (f *fakeData) CreateWebhook(_ context.Context, _, _ string, enabled bool) (int64, error) {
 	f.lastWebhookEnabled = enabled
 	return 7, nil

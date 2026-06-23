@@ -207,6 +207,27 @@ var schema = []string{
 	`CREATE TRIGGER webhooks_notify
 		AFTER INSERT OR UPDATE OR DELETE ON webhooks
 		FOR EACH ROW EXECUTE FUNCTION notify_webhooks_changed()`,
+	// Recorded video clips pulled from a device's SD card (H-Protocol playback,
+	// 0x4070). The .mp4 is stored on the server (CLIPS_ROOT, the "bucket");
+	// storage_path is relative to that root. status: requested → receiving →
+	// ready | error. This is metadata only — the bytes live on disk.
+	`CREATE TABLE IF NOT EXISTS clips (
+		id             BIGSERIAL PRIMARY KEY,
+		serial         TEXT NOT NULL,
+		camera         INT NOT NULL,
+		profile        INT NOT NULL,
+		start_utc      BIGINT NOT NULL,
+		end_utc        BIGINT NOT NULL,
+		duration_secs  INT NOT NULL DEFAULT 0,
+		status         TEXT NOT NULL DEFAULT 'requested',
+		file_size      BIGINT NOT NULL DEFAULT 0,
+		bytes_received BIGINT NOT NULL DEFAULT 0,
+		storage_path   TEXT NOT NULL,
+		error          TEXT NOT NULL DEFAULT '',
+		created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+		updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+	)`,
+	`CREATE INDEX IF NOT EXISTS clips_serial_created_idx ON clips (serial, created_at DESC)`,
 }
 
 // Store is the gateway database. It backs device authorization (the unit

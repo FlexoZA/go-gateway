@@ -9,11 +9,13 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +75,10 @@ type DataStore interface {
 	ListAPIKeyMeta(ctx context.Context) ([]map[string]any, error)
 	CreateAPIKey(ctx context.Context, name string) (string, error)
 	RevokeAPIKey(ctx context.Context, prefix string) (int64, error)
+
+	ListClips(ctx context.Context, serial string, limit, offset int) ([]map[string]any, error)
+	GetClip(ctx context.Context, id int64) (map[string]any, error)
+	DeleteClip(ctx context.Context, id int64) (string, error)
 }
 
 // Setting keys httpapi validates specially (mirror the postgres.Setting* consts).
@@ -97,6 +103,7 @@ type Server struct {
 	hub           *gateway.Hub
 	internalToken string
 	hlsRoot       string
+	clipsRoot     string
 	srv           *http.Server
 }
 
@@ -107,6 +114,10 @@ func (s *Server) SetInternalToken(token string) { s.internalToken = token }
 // SetHLSRoot enables HLS file serving (GET /api/hls/...) from dir. Empty disables
 // it (the route responds 404).
 func (s *Server) SetHLSRoot(dir string) { s.hlsRoot = dir }
+
+// SetClipsRoot sets the directory recorded-clip .mp4 files are stored under (the
+// bucket), used by the clip download handler.
+func (s *Server) SetClipsRoot(dir string) { s.clipsRoot = dir }
 
 // New builds the API server. unit is this gateway's unit type (e.g. "howen"),
 // used as the default for mapping endpoints. If verifier is nil, protected
@@ -156,6 +167,13 @@ func New(host string, port int, unit string, verifier KeyVerifier, data DataStor
 		"POST /api/units/{serial}/stream/start": s.handleStreamStart,
 		"POST /api/units/{serial}/stream/stop":  s.handleStreamStop,
 		"GET /api/hls/":                         s.handleHLS,
+
+		// Recorded clips (request a download, then poll status / download the .mp4).
+		"POST /api/units/{serial}/clips": s.handleClipRequest,
+		"GET /api/clips":                 s.handleListClips,
+		"GET /api/clips/{id}":            s.handleGetClip,
+		"GET /api/clips/{id}/download":   s.handleClipDownload,
+		"DELETE /api/clips/{id}":         s.handleDeleteClip,
 
 		// Device approval (registry, via the store).
 		"GET /api/devices":                   s.handleListDevices,
@@ -458,6 +476,142 @@ func (s *Server) handleHLS(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "video/mp2t")
 	}
 	http.StripPrefix("/api/hls/", http.FileServer(http.Dir(s.hlsRoot))).ServeHTTP(w, r)
+}
+
+// POST /api/units/{serial}/clips — ask the device to upload a recorded clip. The
+// .mp4 arrives asynchronously; the response carries the clip id to poll.
+func (s *Server) handleClipRequest(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	vc, ok := s.hub.Video(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or video unavailable"})
+		return
+	}
+	var req gateway.ClipRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	info, err := vc.RequestClip(ctx, req)
+	if err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "clip_id": info.ClipID, "session_id": info.SessionID, "status": info.Status,
+	})
+}
+
+// GET /api/clips?serial=&limit=&offset= — list recorded clips, newest first.
+func (s *Server) handleListClips(w http.ResponseWriter, r *http.Request) {
+	if !s.dataReady(w) {
+		return
+	}
+	limit, offset := pageParams(r)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	clips, err := s.data.ListClips(ctx, r.URL.Query().Get("serial"), limit, offset)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"clips": clips})
+}
+
+// GET /api/clips/{id} — one clip's metadata/status.
+func (s *Server) handleGetClip(w http.ResponseWriter, r *http.Request) {
+	clip, ok := s.lookupClip(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, clip)
+}
+
+// GET /api/clips/{id}/download — stream the stored .mp4.
+func (s *Server) handleClipDownload(w http.ResponseWriter, r *http.Request) {
+	clip, ok := s.lookupClip(w, r)
+	if !ok {
+		return
+	}
+	if status, _ := clip["status"].(string); status != "ready" {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "clip not ready", "status": clip["status"]})
+		return
+	}
+	if s.clipsRoot == "" {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "clip storage not configured"})
+		return
+	}
+	rel, _ := clip["storage_path"].(string)
+	full := filepath.Join(s.clipsRoot, filepath.FromSlash(rel))
+	if relCheck, err := filepath.Rel(s.clipsRoot, full); err != nil || strings.HasPrefix(relCheck, "..") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid clip path"})
+		return
+	}
+	if _, err := os.Stat(full); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "clip file missing"})
+		return
+	}
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(full)))
+	http.ServeFile(w, r, full)
+}
+
+// DELETE /api/clips/{id} — remove the record and its file.
+func (s *Server) handleDeleteClip(w http.ResponseWriter, r *http.Request) {
+	if !s.dataReady(w) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid clip id"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	storagePath, err := s.data.DeleteClip(ctx, id)
+	if err != nil {
+		if err.Error() == notFoundMsg {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "clip not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if storagePath != "" && s.clipsRoot != "" {
+		_ = os.Remove(filepath.Join(s.clipsRoot, filepath.FromSlash(storagePath)))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// lookupClip parses {id}, fetches the clip, and writes the appropriate error
+// response (returning ok=false) when missing.
+func (s *Server) lookupClip(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
+	if !s.dataReady(w) {
+		return nil, false
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid clip id"})
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	clip, err := s.data.GetClip(ctx, id)
+	if err != nil {
+		if err.Error() == notFoundMsg {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "clip not found"})
+			return nil, false
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return nil, false
+	}
+	return clip, true
 }
 
 // GET /api/users — list accounts (never password hashes).

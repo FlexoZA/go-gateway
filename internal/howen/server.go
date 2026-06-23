@@ -126,8 +126,24 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		}
 		return nil
 
-	case msgPlaybackResponse, msgFileQueryResponse,
-		msgParamConfigResponse, msgSnapshotResponse, msgPlaybackEnd:
+	case msgPlaybackResponse:
+		// Playback (clip) request ack (0x1070) — route to the waiting RequestClip
+		// by ss, same as the live-preview ack.
+		if obj, err := parseHowenJSONObject(f.Payload); err == nil {
+			s.resolveDeviceAnswer(obj)
+		}
+		return nil
+
+	case msgPlaybackEnd:
+		// The device finished uploading a clip (0x1071) — finalize the .mp4.
+		if obj, err := parseHowenJSONObject(f.Payload); err == nil {
+			if ss := toString(obj["ss"]); ss != "" && s.conn.Deps.Clips != nil {
+				s.conn.Deps.Clips.Finish(ss)
+			}
+		}
+		return nil
+
+	case msgFileQueryResponse, msgParamConfigResponse, msgSnapshotResponse:
 		// Other video/config responses: handled in later milestones.
 		log.Debug(map[string]any{"event": "command_response_ignored", "type": f.Type})
 		return nil

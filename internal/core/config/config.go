@@ -77,6 +77,10 @@ type Config struct {
 
 	// FFmpegPath is the ffmpeg binary used to remux H.264 → HLS.
 	FFmpegPath string
+
+	// ClipsRoot is the directory (the "bucket") where recorded clip .mp4 files
+	// are stored on the server. Should be a persistent volume.
+	ClipsRoot string
 }
 
 // VideoEnabled reports whether live media streaming is configured.
@@ -110,6 +114,7 @@ func Load() Config {
 		MediaAdvertiseHost:         os.Getenv("MEDIA_ADVERTISE_HOST"),
 		HLSRoot:                    getenv("HLS_ROOT", "/tmp/hls"),
 		FFmpegPath:                 getenv("FFMPEG_PATH", "ffmpeg"),
+		ClipsRoot:                  getenv("CLIPS_ROOT", "/var/lib/gateway/clips"),
 	}
 }
 

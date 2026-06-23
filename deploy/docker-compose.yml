@@ -58,8 +58,12 @@ services:
       # DISABLES video. The media port (33001) must be published below + reachable.
       - MEDIA_ADVERTISE_HOST=${MEDIA_ADVERTISE_HOST:-}
       - MEDIA_PORT=${MEDIA_PORT:-33001}
+      # Recorded clips ("bucket") are stored here on a persistent volume.
+      - CLIPS_ROOT=${CLIPS_ROOT:-/var/lib/gateway/clips}
       # Set DEBUG=1 (or DEBUG=tcp/howen) for verbose per-frame logging.
       - DEBUG=${DEBUG:-}
+    volumes:
+      - clipdata:/var/lib/gateway/clips
     ports:
       - "33000:33000"
       - "33001:33001"
@@ -96,3 +100,4 @@ services:
 
 volumes:
   pgdata:
+  clipdata:

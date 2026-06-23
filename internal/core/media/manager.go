@@ -44,19 +44,24 @@ func NewManager(hlsRoot, ffmpegPath string, log *logging.Logger) *Manager {
 // HLSRoot is the directory HLS output is written under (served by the HTTP API).
 func (m *Manager) HLSRoot() string { return m.hlsRoot }
 
-// Stream is one live stream: an ffmpeg process fed H.264, producing HLS on disk.
+// Stream is one ffmpeg process fed H.264/H.265: either a live stream producing
+// rolling HLS (Dir set), or a recorded clip producing a single .mp4 (outFile
+// set). Frames are written the same way; only the ffmpeg output differs.
 type Stream struct {
 	ID      string
 	Serial  string
 	Camera  int
 	Profile int
-	Dir     string // HLS output dir (<root>/<serial>/<camera>/<profile>)
+	Dir     string // HLS output dir (<root>/<serial>/<camera>/<profile>); empty for clips
+	outFile string // clip .mp4 path; empty for HLS
+	codec   string // input codec for clips: "h264" or "hevc"
 	Started time.Time
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
-	running bool // ffmpeg spawned
+	done    chan struct{} // closed once ffmpeg has exited (clip finalize waits on it)
+	running bool          // ffmpeg spawned
 	closed  bool
 	bytes   int64
 }
@@ -81,6 +86,71 @@ func (m *Manager) Register(id, serial string, camera, profile int) (*Stream, err
 	m.mu.Unlock()
 	m.log.Debug(map[string]any{"event": "stream_registered", "id": id, "serial": serial, "camera": camera, "profile": profile})
 	return s, nil
+}
+
+// RegisterClip creates (or replaces) a clip stream that remuxes incoming frames
+// into a single .mp4 at outFile. ffmpeg starts lazily on the first frame, using
+// the given input codec ("h264" or "hevc"). The parent directory is created.
+func (m *Manager) RegisterClip(id, serial string, camera, profile int, outFile, codec string) (*Stream, error) {
+	if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
+		return nil, fmt.Errorf("media: mkdir %s: %w", filepath.Dir(outFile), err)
+	}
+	_ = os.Remove(outFile) // clear any stale partial from a previous attempt
+	if codec != "hevc" {
+		codec = "h264"
+	}
+
+	m.mu.Lock()
+	if old := m.streams[id]; old != nil {
+		old.stop()
+	}
+	s := &Stream{ID: id, Serial: serial, Camera: camera, Profile: profile, outFile: outFile, codec: codec, Started: time.Now()}
+	m.streams[id] = s
+	m.mu.Unlock()
+	m.log.Debug(map[string]any{"event": "clip_registered", "id": id, "serial": serial, "out": outFile, "codec": codec})
+	return s, nil
+}
+
+// FinishClip gracefully closes a clip's ffmpeg (so the .mp4 moov atom is written)
+// and returns the final file size. Unlike Stop it does not delete the output.
+func (m *Manager) FinishClip(id string) (int64, error) {
+	m.mu.Lock()
+	s := m.streams[id]
+	delete(m.streams, id)
+	m.mu.Unlock()
+	if s == nil {
+		return 0, fmt.Errorf("media: no clip %q", id)
+	}
+
+	s.mu.Lock()
+	out := s.outFile
+	if !s.closed {
+		s.closed = true
+		if s.stdin != nil {
+			s.stdin.Close() // EOF → ffmpeg flushes and exits
+		}
+	}
+	done := s.done
+	s.mu.Unlock()
+
+	// Wait for ffmpeg to fully exit so the .mp4 moov atom is written, but don't
+	// hang forever if it wedges.
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			s.stop() // kill a stuck ffmpeg
+		}
+	}
+	if out == "" {
+		return 0, nil
+	}
+	fi, err := os.Stat(out)
+	if err != nil {
+		return 0, err
+	}
+	m.log.Debug(map[string]any{"event": "clip_finished", "id": id, "out": out, "bytes": fi.Size()})
+	return fi.Size(), nil
 }
 
 // Get returns a stream by id.
@@ -109,7 +179,11 @@ func (m *Manager) Stop(id string) {
 	m.mu.Unlock()
 	if s != nil {
 		s.stop()
-		clearDir(s.Dir)
+		if s.outFile != "" {
+			_ = os.Remove(s.outFile) // clip: drop the partial .mp4
+		} else {
+			clearDir(s.Dir) // live: drop HLS segments/playlist
+		}
 		m.log.Debug(map[string]any{"event": "stream_stopped", "id": id})
 	}
 }
@@ -149,19 +223,37 @@ func (s *Stream) write(m *Manager, data []byte) error {
 // spawn starts ffmpeg: read Annex-B H.264 from stdin, copy the video into a
 // rolling HLS playlist (no re-encode).
 func (s *Stream) spawn(m *Manager) error {
-	playlist := filepath.Join(s.Dir, "stream.m3u8")
-	segments := filepath.Join(s.Dir, "seg_%03d.ts")
-	args := []string{
-		"-hide_banner", "-loglevel", "error",
-		"-fflags", "+genpts",
-		"-f", "h264", "-i", "pipe:0",
-		"-an", "-c:v", "copy",
-		"-f", "hls",
-		"-hls_time", strconv.Itoa(m.segDur),
-		"-hls_list_size", strconv.Itoa(m.listSize),
-		"-hls_flags", "delete_segments+independent_segments",
-		"-hls_segment_filename", segments,
-		playlist,
+	var args []string
+	if s.outFile != "" {
+		// Clip: remux the recorded elementary stream into a single .mp4 (no
+		// re-encode). +faststart moves the moov atom up so the file is seekable.
+		codec := s.codec
+		if codec == "" {
+			codec = "h264"
+		}
+		args = []string{
+			"-hide_banner", "-loglevel", "error",
+			"-fflags", "+genpts",
+			"-f", codec, "-i", "pipe:0",
+			"-an", "-c", "copy",
+			"-movflags", "+faststart",
+			"-y", s.outFile,
+		}
+	} else {
+		playlist := filepath.Join(s.Dir, "stream.m3u8")
+		segments := filepath.Join(s.Dir, "seg_%03d.ts")
+		args = []string{
+			"-hide_banner", "-loglevel", "error",
+			"-fflags", "+genpts",
+			"-f", "h264", "-i", "pipe:0",
+			"-an", "-c:v", "copy",
+			"-f", "hls",
+			"-hls_time", strconv.Itoa(m.segDur),
+			"-hls_list_size", strconv.Itoa(m.listSize),
+			"-hls_flags", "delete_segments+independent_segments",
+			"-hls_segment_filename", segments,
+			playlist,
+		}
 	}
 	cmd := exec.Command(m.ffmpeg, args...)
 	stdin, err := cmd.StdinPipe()
@@ -175,9 +267,12 @@ func (s *Stream) spawn(m *Manager) error {
 	}
 	s.cmd = cmd
 	s.stdin = stdin
-	m.log.Info(map[string]any{"event": "ffmpeg_started", "id": s.ID, "pid": cmd.Process.Pid, "dir": s.Dir})
+	s.done = make(chan struct{})
+	m.log.Info(map[string]any{"event": "ffmpeg_started", "id": s.ID, "pid": cmd.Process.Pid, "dir": s.Dir, "out": s.outFile})
+	done := s.done
 	go func() {
 		err := cmd.Wait()
+		close(done)
 		m.log.Debug(map[string]any{"event": "ffmpeg_exited", "id": s.ID, "error": errStr(err)})
 	}()
 	return nil

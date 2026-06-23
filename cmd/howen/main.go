@@ -91,10 +91,19 @@ func main() {
 	// Live video (HLS): wire the media manager + the host the device dials back
 	// for media frames. Disabled unless MEDIA_ADVERTISE_HOST is set.
 	var mediaMgr *media.Manager
+	var clipReg *media.ClipRegistry
 	if cfg.VideoEnabled() {
 		mediaMgr = media.NewManager(cfg.HLSRoot, cfg.FFmpegPath, log)
 		deps.Media = mediaMgr
 		deps.MediaAdvertiseHost = net.JoinHostPort(cfg.MediaAdvertiseHost, strconv.Itoa(cfg.MediaPort))
+		// Recorded clips need the DB to track metadata; only enable when present.
+		if store != nil {
+			clipReg = media.NewClipRegistry(mediaMgr, store, cfg.ClipsRoot, log)
+			deps.Clips = clipReg
+			log.Info(map[string]any{"event": "clips_enabled", "clips_root": cfg.ClipsRoot})
+		} else {
+			log.Info(map[string]any{"event": "clips_disabled", "detail": "no database"})
+		}
 		log.Info(map[string]any{"event": "video_enabled", "advertise": deps.MediaAdvertiseHost, "hls_root": cfg.HLSRoot})
 	} else {
 		log.Info(map[string]any{"event": "video_disabled", "detail": "MEDIA_ADVERTISE_HOST not set"})
@@ -178,6 +187,9 @@ func main() {
 		if mediaMgr != nil {
 			api.SetHLSRoot(cfg.HLSRoot)
 		}
+		if clipReg != nil {
+			api.SetClipsRoot(cfg.ClipsRoot)
+		}
 		go func() {
 			if err := api.Run(ctx); err != nil {
 				log.Error(map[string]any{"event": "http_fatal", "error": err.Error()})
@@ -191,6 +203,7 @@ func main() {
 		ms := &howen.MediaServer{
 			Addr:    net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.MediaPort)),
 			Manager: mediaMgr,
+			Clips:   clipReg,
 			Log:     log,
 		}
 		go func() {

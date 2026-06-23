@@ -19,8 +19,9 @@ import (
 // the control side sent — then streams 0x0011 frames, which are routed to the
 // matching live stream's ffmpeg.
 type MediaServer struct {
-	Addr        string         // host:port to bind (e.g. 0.0.0.0:33001)
-	Manager     *media.Manager // where video frames are written
+	Addr        string              // host:port to bind (e.g. 0.0.0.0:33001)
+	Manager     *media.Manager      // where live video frames are written (HLS)
+	Clips       *media.ClipRegistry // where recorded-clip frames are written (.mp4); may be nil
 	Log         *logging.Logger
 	idleTimeout time.Duration
 }
@@ -65,6 +66,7 @@ func (ms *MediaServer) handle(conn net.Conn) {
 	}
 	r := bufio.NewReaderSize(conn, 64*1024)
 	var sessionID string
+	var isClip bool
 	var frames int
 
 	for {
@@ -73,6 +75,12 @@ func (ms *MediaServer) handle(conn net.Conn) {
 		if _, err := io.ReadFull(r, header[:]); err != nil {
 			if sessionID != "" {
 				ms.Log.Debug(map[string]any{"event": "media_closed", "ss": sessionID, "frames": frames, "error": ioErr(err)})
+			}
+			// A clip's media connection closing (EOF/idle) is a finalize signal —
+			// the device may upload the whole clip then disconnect without a
+			// separate PLAYBACK_END. Finish is idempotent with the control-side end.
+			if isClip && ms.Clips != nil {
+				ms.Clips.Finish(sessionID)
 			}
 			return
 		}
@@ -91,11 +99,12 @@ func (ms *MediaServer) handle(conn net.Conn) {
 		}
 
 		switch h.Type {
-		case msgMediaRegister: // 0x1002 — bind this connection to a live stream
+		case msgMediaRegister: // 0x1002 — bind this connection to a live stream or clip
 			obj, _ := parseHowenJSONObject(payload)
 			sessionID = toString(obj["ss"])
+			isClip = ms.Clips != nil && ms.Clips.IsClip(sessionID)
 			_, _ = conn.Write(buildHowenJSONFrame(msgMediaRegisterResponse, map[string]any{"ss": sessionID, "err": "0"}))
-			ms.Log.Info(map[string]any{"event": "media_register", "ss": sessionID, "remote": conn.RemoteAddr().String()})
+			ms.Log.Info(map[string]any{"event": "media_register", "ss": sessionID, "clip": isClip, "remote": conn.RemoteAddr().String()})
 
 		case msgMediaData: // 0x0011 — a media frame
 			if sessionID == "" {
@@ -106,8 +115,13 @@ func (ms *MediaServer) handle(conn net.Conn) {
 				continue // skip audio / malformed
 			}
 			frames++
+			if isClip {
+				// Recorded clip → remux to .mp4 (gated to the first keyframe).
+				ms.Clips.WriteFrame(sessionID, mf.MediaType == 1, mf.Data)
+				continue
+			}
 			if err := ms.Manager.WriteVideo(sessionID, mf.Data); err != nil {
-				// The stream was stopped/unknown — drop the connection.
+				// The live stream was stopped/unknown — drop the connection.
 				ms.Log.Debug(map[string]any{"event": "media_write_failed", "ss": sessionID, "error": err.Error()})
 				return
 			}

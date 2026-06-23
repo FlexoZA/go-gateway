@@ -27,11 +27,30 @@ type StreamInfo struct {
 	HLSPath   string `json:"hls_path"` // <serial>/<camera>/<profile>/stream.m3u8
 }
 
+// ClipRequest asks a device to upload a recorded clip for a camera/time window.
+type ClipRequest struct {
+	Camera   int   `json:"camera"`
+	Profile  int   `json:"profile"`
+	StartUTC int64 `json:"start_utc"`
+	EndUTC   int64 `json:"end_utc"`
+	Audio    bool  `json:"audio"`
+}
+
+// ClipInfo identifies a clip download that has been requested (the .mp4 arrives
+// asynchronously; poll the clips API for status/progress).
+type ClipInfo struct {
+	ClipID    int64  `json:"clip_id"`
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+}
+
 // VideoController is implemented by a protocol session that can start/stop a live
-// video stream on its device. The HTTP API reaches it through the Hub.
+// video stream and request recorded clips from its device. The HTTP API reaches
+// it through the Hub.
 type VideoController interface {
 	StartLive(ctx context.Context, camera, profile int) (StreamInfo, error)
 	StopLive(ctx context.Context, camera, profile int) error
+	RequestClip(ctx context.Context, req ClipRequest) (ClipInfo, error)
 }
 
 // Capabilities declares what a unit type supports. GPS-only trackers leave the
@@ -102,8 +121,11 @@ type Deps struct {
 	// session that supports video reads it (and MediaAdvertiseHost) to start
 	// streams; it must nil-check.
 	Media *media.Manager
+	// Clips tracks recorded-clip downloads (.mp4 to the server bucket); nil when
+	// video/clips are disabled. A protocol session must nil-check.
+	Clips *media.ClipRegistry
 	// MediaAdvertiseHost is the host:port the device dials back for media frames
-	// (embedded in the start-stream command). Empty when video is disabled.
+	// (embedded in the start-stream/playback command). Empty when video is disabled.
 	MediaAdvertiseHost string
 }
 
