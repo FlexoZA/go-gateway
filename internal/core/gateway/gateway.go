@@ -44,13 +44,28 @@ type ClipInfo struct {
 	Status    string `json:"status"`
 }
 
+// Recording is one file the device reports for a camera/time window (from a file
+// query). StartUTC/EndUTC are true UTC epochs; DeviceStart/DeviceEnd are the raw
+// local wall-clock strings the device reported (useful for diagnosing timezone).
+type Recording struct {
+	Camera      int    `json:"camera"`
+	Profile     int    `json:"profile"`
+	StartUTC    int64  `json:"start_utc"`
+	EndUTC      int64  `json:"end_utc"`
+	FileName    string `json:"file_name"`
+	Size        int64  `json:"size"`
+	DeviceStart string `json:"device_start"`
+	DeviceEnd   string `json:"device_end"`
+}
+
 // VideoController is implemented by a protocol session that can start/stop a live
-// video stream and request recorded clips from its device. The HTTP API reaches
-// it through the Hub.
+// video stream, list recorded files, and request recorded clips from its device.
+// The HTTP API reaches it through the Hub.
 type VideoController interface {
 	StartLive(ctx context.Context, camera, profile int) (StreamInfo, error)
 	StopLive(ctx context.Context, camera, profile int) error
 	RequestClip(ctx context.Context, req ClipRequest) (ClipInfo, error)
+	QueryRecordings(ctx context.Context, camera, profile int, startUTC, endUTC int64) ([]Recording, error)
 }
 
 // Capabilities declares what a unit type supports. GPS-only trackers leave the

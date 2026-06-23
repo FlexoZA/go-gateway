@@ -168,6 +168,8 @@ func New(host string, port int, unit string, verifier KeyVerifier, data DataStor
 		"POST /api/units/{serial}/stream/stop":  s.handleStreamStop,
 		"GET /api/hls/":                         s.handleHLS,
 
+		// Discover what footage a device has (file query) before requesting a clip.
+		"GET /api/units/{serial}/recordings": s.handleQueryRecordings,
 		// Recorded clips (request a download, then poll status / download the .mp4).
 		"POST /api/units/{serial}/clips": s.handleClipRequest,
 		"GET /api/clips":                 s.handleListClips,
@@ -476,6 +478,46 @@ func (s *Server) handleHLS(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "video/mp2t")
 	}
 	http.StripPrefix("/api/hls/", http.FileServer(http.Dir(s.hlsRoot))).ServeHTTP(w, r)
+}
+
+// GET /api/units/{serial}/recordings?camera=&profile=&start_utc=&end_utc= — ask
+// the device what footage it has for the window (defaults: all cameras, last 24h).
+func (s *Server) handleQueryRecordings(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	vc, ok := s.hub.Video(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or video unavailable"})
+		return
+	}
+	q := r.URL.Query()
+	camera := -1
+	if v := q.Get("camera"); v != "" {
+		camera, _ = strconv.Atoi(v)
+	}
+	profile := 1
+	if v := q.Get("profile"); v != "" {
+		profile, _ = strconv.Atoi(v)
+	}
+	end, _ := strconv.ParseInt(q.Get("end_utc"), 10, 64)
+	start, _ := strconv.ParseInt(q.Get("start_utc"), 10, 64)
+	if end <= 0 {
+		end = time.Now().Unix()
+	}
+	if start <= 0 {
+		start = end - 24*60*60
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	recs, err := vc.QueryRecordings(ctx, camera, profile, start, end)
+	if err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"recordings": recs, "count": len(recs)})
 }
 
 // POST /api/units/{serial}/clips — ask the device to upload a recorded clip. The

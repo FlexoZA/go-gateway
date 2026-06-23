@@ -63,7 +63,11 @@ func (*Protocol) ReadFrame(r *bufio.Reader) (gateway.Frame, error) {
 }
 
 func (*Protocol) NewSession(c *gateway.Conn) gateway.Session {
-	return &session{conn: c, pending: map[string]chan map[string]any{}}
+	return &session{
+		conn:        c,
+		pending:     map[string]chan map[string]any{},
+		fileQueries: map[string]*fileQueryCollector{},
+	}
 }
 
 type gateStatus int
@@ -88,6 +92,9 @@ type session struct {
 	// loop delivers responses.
 	pendingMu sync.Mutex
 	pending   map[string]chan map[string]any
+	// fileQueries collects multi-frame file-query (0x1060) responses by ss.
+	// Guarded by pendingMu.
+	fileQueries map[string]*fileQueryCollector
 }
 
 // OnFrame dispatches a decoded frame.
@@ -143,7 +150,15 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		}
 		return nil
 
-	case msgFileQueryResponse, msgParamConfigResponse, msgSnapshotResponse:
+	case msgFileQueryResponse:
+		// File-query result (0x1060) — one frame per file (err=8), terminated by
+		// err=9. Collected by the waiting QueryRecordings.
+		if obj, err := parseHowenJSONObject(f.Payload); err == nil {
+			s.collectFileQuery(obj)
+		}
+		return nil
+
+	case msgParamConfigResponse, msgSnapshotResponse:
 		// Other video/config responses: handled in later milestones.
 		log.Debug(map[string]any{"event": "command_response_ignored", "type": f.Type})
 		return nil
