@@ -162,6 +162,8 @@ func New(host string, port int, unit string, verifier KeyVerifier, data DataStor
 		"GET /api/units":                    s.handleListUnits,
 		"GET /api/units/{serial}":           s.handleGetUnit,
 		"GET /api/units/{serial}/status":    s.handleUnitStatus,
+		"GET /api/units/{serial}/config":    s.handleGetConfig,
+		"PUT /api/units/{serial}/config":    s.handleUpdateConfig,
 		"POST /api/units/{serial}/commands": s.handleCommand,
 
 		// Live video.
@@ -891,6 +893,83 @@ func (s *Server) handleUnitStatus(w http.ResponseWriter, r *http.Request) {
 		"connection": info,
 		"telemetry":  telemetry,
 	})
+}
+
+// defaultConfigModules is the Phase-1 set read when ?modules= is omitted.
+var defaultConfigModules = []string{"VERSIONINFO", "JTBASE", "WIFI", "DIALUP", "SERVER"}
+
+// GET /api/units/{serial}/config?modules=WIFI,DIALUP,… — read the unit's config.
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	cc, ok := s.unitConfig(w, r.PathValue("serial"))
+	if !ok {
+		return
+	}
+	modules := defaultConfigModules
+	if v := strings.TrimSpace(r.URL.Query().Get("modules")); v != "" {
+		modules = []string{}
+		for _, m := range strings.Split(v, ",") {
+			if m = strings.TrimSpace(m); m != "" {
+				modules = append(modules, m)
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	sc, err := cc.RequestConfig(ctx, modules)
+	if err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sc": sc})
+}
+
+// PUT /api/units/{serial}/config — write changed fields, then re-read them.
+// Body: {"sc": {"WIFI": {"SSID": "x"}}} — send ONLY the fields being changed.
+func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	cc, ok := s.unitConfig(w, r.PathValue("serial"))
+	if !ok {
+		return
+	}
+	var body struct {
+		Sc map[string]any `json:"sc"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil || len(body.Sc) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "body must be {\"sc\": {SEGMENT: {field: value}}}"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	if err := cc.UpdateConfig(ctx, body.Sc); err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	// Re-read the segments we just wrote so the UI reflects the device truth.
+	modules := make([]string, 0, len(body.Sc))
+	for k := range body.Sc {
+		modules = append(modules, k)
+	}
+	sc, err := cc.RequestConfig(ctx, modules)
+	if err != nil {
+		// The write succeeded; only the read-back failed.
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sc": map[string]any{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sc": sc})
+}
+
+// unitConfig resolves the config controller for a connected unit, writing the
+// appropriate error response when unavailable.
+func (s *Server) unitConfig(w http.ResponseWriter, serial string) (gateway.ConfigController, bool) {
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return nil, false
+	}
+	cc, ok := s.hub.Config(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or config unavailable"})
+		return nil, false
+	}
+	return cc, true
 }
 
 // POST /api/units/{serial}/commands — send a control command to a device.

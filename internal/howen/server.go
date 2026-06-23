@@ -96,6 +96,12 @@ type session struct {
 	// Guarded by pendingMu.
 	fileQueries map[string]*fileQueryCollector
 
+	// configPending holds the single in-flight param-config (0x10A0) collector.
+	// Config responses do NOT echo our ss (firmware quirk), so they can't be keyed
+	// by ss like other commands — only one config op runs at a time per session.
+	configMu      sync.Mutex
+	configPending *configCollector
+
 	// latestStatus is the most recent parsed device status (network/4G, modules,
 	// storage, IO, location, environment), surfaced by the device-detail API.
 	statusMu     sync.Mutex
@@ -175,8 +181,17 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		}
 		return nil
 
-	case msgParamConfigResponse, msgSnapshotResponse:
-		// Other video/config responses: handled in later milestones.
+	case msgParamConfigResponse:
+		// Parameter-config result (0x10A0) — routed to the in-flight RequestConfig/
+		// UpdateConfig. NB: the device does NOT echo our ss here, so we match by the
+		// single pending collector, not by ss.
+		if obj, err := parseHowenJSONObject(f.Payload); err == nil {
+			s.collectParamConfig(obj)
+		}
+		return nil
+
+	case msgSnapshotResponse:
+		// Snapshot response: handled in a later milestone.
 		log.Debug(map[string]any{"event": "command_response_ignored", "type": f.Type})
 		return nil
 

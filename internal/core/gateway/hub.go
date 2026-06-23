@@ -160,6 +160,18 @@ func (h *Hub) Status(serial string) (map[string]any, bool) {
 	return sr.Status()
 }
 
+// Config returns the device's config controller, if its session supports it.
+func (h *Hub) Config(serial string) (ConfigController, bool) {
+	h.mu.RLock()
+	e, ok := h.entries[serial]
+	h.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	cc, ok := e.commander.(ConfigController)
+	return cc, ok
+}
+
 // Send dispatches a command to a connected device and returns its response.
 // Returns ErrNotConnected if the device is not currently connected.
 func (h *Hub) Send(ctx context.Context, serial string, cmd Command) (CommandResult, error) {

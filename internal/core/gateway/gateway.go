@@ -68,6 +68,14 @@ type VideoController interface {
 	QueryRecordings(ctx context.Context, camera, profile int, startUTC, endUTC int64) ([]Recording, error)
 }
 
+// ConfigController is implemented by a protocol session that can read and write
+// its device's parameter configuration (Wi-Fi, mobile, server, …). The `sc` map
+// is keyed by segment name; each segment is an object of fields.
+type ConfigController interface {
+	RequestConfig(ctx context.Context, modules []string) (map[string]any, error)
+	UpdateConfig(ctx context.Context, sc map[string]any) error
+}
+
 // Capabilities declares what a unit type supports. GPS-only trackers leave the
 // optional capabilities false so no video/command code is wired in.
 type Capabilities struct {
