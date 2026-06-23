@@ -37,7 +37,9 @@ export function LivePlayer({ serial }: { serial: string }) {
 
     if (Hls.isSupported()) {
       const hls = new Hls({
-        lowLatencyMode: true,
+        // Plain ffmpeg HLS (not LL-HLS); LL mode expects blocking playlist
+        // reloads and misbehaves on the short startup playlist.
+        lowLatencyMode: false,
         liveSyncDurationCount: 3,
         // ffmpeg may not have written the first segments yet — keep retrying the
         // manifest/segments for a while instead of failing immediately.
@@ -79,10 +81,16 @@ export function LivePlayer({ serial }: { serial: string }) {
     setState("starting");
     setError(null);
     try {
-      const res = await api<{ hls_path: string }>(`units/${encodeURIComponent(serial)}/stream/start`, {
+      const res = await api<{ hls_path: string; ready?: boolean }>(`units/${encodeURIComponent(serial)}/stream/start`, {
         method: "POST",
         body: JSON.stringify({ camera, profile }),
       });
+      // The gateway waits for ffmpeg's first segment; ready=false means the
+      // device accepted the command but sent no video in time (camera off /
+      // wrong channel). Still attach — hls.js keeps retrying for late frames.
+      if (res.ready === false) {
+        setError("Device accepted the request but sent no video yet — check the camera/channel.");
+      }
       attach(`/api/gw/hls/${res.hls_path}`);
     } catch (e: any) {
       setError(e.message || "Failed to start stream");

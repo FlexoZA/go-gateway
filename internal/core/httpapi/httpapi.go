@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -369,9 +370,37 @@ func (s *Server) handleStreamStart(w http.ResponseWriter, r *http.Request) {
 		s.writeStreamError(w, err)
 		return
 	}
+	// The device has accepted the command, but ffmpeg only writes the playlist
+	// once it has buffered the first ~2s segment (a few seconds after the device
+	// actually starts sending frames). Wait for it so the browser never races a
+	// not-yet-existent manifest and gets a hard 404. `ready:false` just means the
+	// playlist wasn't up within the window — the player can still keep retrying.
+	ready := s.waitHLSReady(ctx, info.HLSPath)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "session_id": info.SessionID, "hls_path": info.HLSPath,
+		"ok": true, "session_id": info.SessionID, "hls_path": info.HLSPath, "ready": ready,
 	})
+}
+
+// waitHLSReady blocks until ffmpeg has written the stream's playlist (i.e. the
+// first HLS segment is on disk) or ctx is done. Returns true if the playlist now
+// exists and is non-empty.
+func (s *Server) waitHLSReady(ctx context.Context, hlsPath string) bool {
+	if s.hlsRoot == "" || hlsPath == "" {
+		return false
+	}
+	file := path.Join(s.hlsRoot, hlsPath)
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if fi, err := os.Stat(file); err == nil && fi.Size() > 0 {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // POST /api/units/{serial}/stream/stop — stop a live stream.
