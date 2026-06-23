@@ -50,6 +50,12 @@ type Commander interface {
 	SupportedCommands() []string
 }
 
+// StatusReporter is implemented by a session that can report its device's latest
+// status snapshot (network/4G, modules, storage, IO, …) for the detail view.
+type StatusReporter interface {
+	Status() (map[string]any, bool)
+}
+
 // Hub is the registry of currently-connected devices. It is protocol-agnostic:
 // any unit-type session that supports commands registers itself, and the HTTP
 // API queries/commands through here. Safe for concurrent use.
@@ -136,6 +142,22 @@ func (h *Hub) Video(serial string) (VideoController, bool) {
 	}
 	vc, ok := e.commander.(VideoController)
 	return vc, ok
+}
+
+// Status returns a connected device's latest status snapshot, if its session
+// reports one.
+func (h *Hub) Status(serial string) (map[string]any, bool) {
+	h.mu.RLock()
+	e, ok := h.entries[serial]
+	h.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	sr, ok := e.commander.(StatusReporter)
+	if !ok {
+		return nil, false
+	}
+	return sr.Status()
 }
 
 // Send dispatches a command to a connected device and returns its response.

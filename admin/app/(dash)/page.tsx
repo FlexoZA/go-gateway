@@ -56,7 +56,11 @@ export default function DashboardPage() {
             <tbody className="divide-y divide-edge">
               {connected.map((u) => (
                 <tr key={u.serial}>
-                  <td className="td font-mono">{u.serial}</td>
+                  <td className="td font-mono">
+                    <Link href={`/devices/${encodeURIComponent(u.serial)}`} className="text-indigo-300 hover:underline">
+                      {u.serial}
+                    </Link>
+                  </td>
                   <td className="td">{u.model || "—"}</td>
                   <td className="td">
                     {u.state === "sleep" ? <Badge tone="amber">standby</Badge> : <Badge tone="green">online</Badge>}

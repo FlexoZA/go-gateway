@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
@@ -57,7 +58,11 @@ export default function DevicesPage() {
             <tbody className="divide-y divide-edge">
               {pendingList.map((d) => (
                 <tr key={d.serial}>
-                  <td className="td font-mono">{d.serial}</td>
+                  <td className="td font-mono">
+                    <Link href={`/devices/${encodeURIComponent(d.serial)}`} className="text-indigo-300 hover:underline">
+                      {d.serial}
+                    </Link>
+                  </td>
                   <td className="td">{d.protocol_guess || "—"}</td>
                   <td className="td font-mono text-slate-400">{d.remote_ip || "—"}</td>
                   <td className="td text-slate-400">{fmt(d.last_seen_at)}</td>
@@ -107,7 +112,11 @@ export default function DevicesPage() {
             <tbody className="divide-y divide-edge">
               {approvedList.map((d) => (
                 <tr key={d.serial}>
-                  <td className="td font-mono">{d.serial}</td>
+                  <td className="td font-mono">
+                    <Link href={`/devices/${encodeURIComponent(d.serial)}`} className="text-indigo-300 hover:underline">
+                      {d.serial}
+                    </Link>
+                  </td>
                   <td className="td">{d.protocol || "—"}</td>
                   <td className="td">
                     <Badge tone={statusTone(d.status)}>{d.status || "unknown"}</Badge>

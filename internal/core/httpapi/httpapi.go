@@ -161,6 +161,7 @@ func New(host string, port int, unit string, verifier KeyVerifier, data DataStor
 		// Connected devices (live, via the hub).
 		"GET /api/units":                    s.handleListUnits,
 		"GET /api/units/{serial}":           s.handleGetUnit,
+		"GET /api/units/{serial}/status":    s.handleUnitStatus,
 		"POST /api/units/{serial}/commands": s.handleCommand,
 
 		// Live video.
@@ -869,6 +870,27 @@ func (s *Server) handleGetUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// GET /api/units/{serial}/status — the connected device's live status detail
+// (connection/server + mobile network/4G, modules, storage, IO, GPS, …).
+func (s *Server) handleUnitStatus(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	info, ok := s.hub.Get(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	telemetry, _ := s.hub.Status(serial)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"serial":     serial,
+		"connection": info,
+		"telemetry":  telemetry,
+	})
 }
 
 // POST /api/units/{serial}/commands — send a control command to a device.

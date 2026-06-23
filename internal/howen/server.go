@@ -95,6 +95,23 @@ type session struct {
 	// fileQueries collects multi-frame file-query (0x1060) responses by ss.
 	// Guarded by pendingMu.
 	fileQueries map[string]*fileQueryCollector
+
+	// latestStatus is the most recent parsed device status (network/4G, modules,
+	// storage, IO, location, environment), surfaced by the device-detail API.
+	statusMu     sync.Mutex
+	latestStatus *howenStatusData
+	statusAt     time.Time
+}
+
+// recordStatus stores the most recent device status for the detail API.
+func (s *session) recordStatus(sd *howenStatusData) {
+	if sd == nil {
+		return
+	}
+	s.statusMu.Lock()
+	s.latestStatus = sd
+	s.statusAt = time.Now().UTC()
+	s.statusMu.Unlock()
 }
 
 // OnFrame dispatches a decoded frame.
@@ -287,6 +304,7 @@ func (s *session) handleGpsStatus(ctx context.Context, payload []byte) error {
 	parsed := parseHowenStatusPayload(payload)
 	if parsed != nil && parsed.Status != nil {
 		s.reconcileLifecycle(ctx, parsed.Status)
+		s.recordStatus(parsed.Status)
 	}
 	if parsed == nil || parsed.Status == nil || parsed.Status.Location == nil {
 		s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{"event": "gps_status_without_location", "serial": s.serial})
@@ -308,6 +326,7 @@ func (s *session) handleAlarmData(ctx context.Context, payload []byte) error {
 	}
 	if parsed.Status != nil {
 		s.reconcileLifecycle(ctx, parsed.Status)
+		s.recordStatus(parsed.Status)
 	}
 	p := buildEventPayload(parsed, s.imei)
 	// A model-specific visual workflow, if defined, overrides the built-in
