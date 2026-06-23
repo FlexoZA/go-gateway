@@ -305,6 +305,12 @@ func (s *session) handleGpsStatus(ctx context.Context, payload []byte) error {
 	if parsed != nil && parsed.Status != nil {
 		s.reconcileLifecycle(ctx, parsed.Status)
 		s.recordStatus(parsed.Status)
+		// TEMP diagnostic: raw status + content bits, to find the Wi-Fi block.
+		s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{
+			"event": "gps_status_raw", "serial": s.serial,
+			"content_bits": fmt.Sprintf("0x%04x", parsed.Status.ContentBits),
+			"hex":          fmt.Sprintf("%x", payload),
+		})
 	}
 	if parsed == nil || parsed.Status == nil || parsed.Status.Location == nil {
 		s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{"event": "gps_status_without_location", "serial": s.serial})
