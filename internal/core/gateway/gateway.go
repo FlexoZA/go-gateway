@@ -127,6 +127,9 @@ type Deps struct {
 	// MediaAdvertiseHost is the host:port the device dials back for media frames
 	// (embedded in the start-stream/playback command). Empty when video is disabled.
 	MediaAdvertiseHost string
+	// DeviceTZOffsetHours localizes clip playback windows to the device's local
+	// clock (Howen indexes recordings by local wall-clock). 0 = UTC.
+	DeviceTZOffsetHours float64
 }
 
 // Conn wraps a device socket with framework dependencies.

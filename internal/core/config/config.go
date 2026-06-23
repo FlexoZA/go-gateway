@@ -44,6 +44,12 @@ type Config struct {
 	// timestamps. The JS gateway uses 0 (UTC).
 	WebhookTimezoneOffsetHours float64
 
+	// DeviceTZOffsetHours is the device's local-clock offset from UTC (e.g. +2
+	// for SAST). Howen indexes recordings by LOCAL wall-clock, so clip playback
+	// requests (0x4070) must localize the start/end window by this offset or the
+	// device returns err=6 (file not found). Clip times in our DB/API stay UTC.
+	DeviceTZOffsetHours float64
+
 	// DeviceAuthMode selects how connecting devices are authorized:
 	//   "allow_all" — accept every device, no registry.
 	//   "postgres"  — track devices in the PostgreSQL registry.
@@ -107,6 +113,7 @@ func Load() Config {
 		DatabaseURL:                dbURL,
 		WebhookURL:                 firstNonEmpty(os.Getenv("DEVICE_WEBHOOK_URL"), os.Getenv("WEBHOOK_URL"), os.Getenv("N8N_WEBHOOK_URL")),
 		WebhookTimezoneOffsetHours: getenvFloat("WEBHOOK_TIMEZONE_OFFSET", 0),
+		DeviceTZOffsetHours:        getenvFloat("DEVICE_TZ_OFFSET", 0),
 		DeviceAuthMode:             authMode,
 		DeviceRejectUnknown:        getenvBool("DEVICE_REJECT_UNKNOWN", true),
 		MappingRefreshSeconds:      getenvInt("MAPPING_REFRESH_SECONDS", 60),

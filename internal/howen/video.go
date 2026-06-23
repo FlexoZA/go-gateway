@@ -93,10 +93,13 @@ func (s *session) StartLive(ctx context.Context, camera, profile int) (gateway.S
 	}, nil
 }
 
-// formatHowenUTC renders a unix time as the device's "YYYY-MM-DD HH:MM:SS" in
-// UTC (matching the playback window fields st/et).
-func formatHowenUTC(unix int64) string {
-	return time.Unix(unix, 0).UTC().Format("2006-01-02 15:04:05")
+// formatHowenDeviceTime renders a UTC unix time as the device's local wall-clock
+// "YYYY-MM-DD HH:MM:SS" (offsetHours from UTC). Howen indexes recordings by local
+// wall-clock, so playback window fields st/et must be localized or the device
+// can't find the file (err=6).
+func formatHowenDeviceTime(unix int64, offsetHours float64) string {
+	t := time.Unix(unix, 0).UTC().Add(time.Duration(offsetHours * float64(time.Hour)))
+	return t.Format("2006-01-02 15:04:05")
 }
 
 // RequestClip asks the device to upload a recorded clip for the camera/time
@@ -138,11 +141,12 @@ func (s *session) RequestClip(ctx context.Context, req gateway.ClipRequest) (gat
 	if req.Audio {
 		fl = "1;2;3"
 	}
+	tz := s.conn.Deps.DeviceTZOffsetHours
 	body := map[string]any{
 		"ss":  ss,
 		"chl": strconv.Itoa(channel),
-		"st":  formatHowenUTC(req.StartUTC),
-		"et":  formatHowenUTC(req.EndUTC),
+		"st":  formatHowenDeviceTime(req.StartUTC, tz),
+		"et":  formatHowenDeviceTime(req.EndUTC, tz),
 		"srv": s.conn.Deps.MediaAdvertiseHost,
 		"fl":  fl,
 		"si":  strconv.Itoa(streamType),

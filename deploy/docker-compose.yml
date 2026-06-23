@@ -60,6 +60,10 @@ services:
       - MEDIA_PORT=${MEDIA_PORT:-33001}
       # Recorded clips ("bucket") are stored here on a persistent volume.
       - CLIPS_ROOT=${CLIPS_ROOT:-/var/lib/gateway/clips}
+      # Device's local-clock offset from UTC (e.g. 2 for SAST). Howen indexes
+      # recordings by local wall-clock, so clip playback windows are localized by
+      # this. Clip times in the DB/API stay UTC. Wrong value → err=6 (no file).
+      - DEVICE_TZ_OFFSET=${DEVICE_TZ_OFFSET:-0}
       # Set DEBUG=1 (or DEBUG=tcp/howen) for verbose per-frame logging.
       - DEBUG=${DEBUG:-}
     volumes:

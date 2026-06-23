@@ -96,6 +96,7 @@ func main() {
 		mediaMgr = media.NewManager(cfg.HLSRoot, cfg.FFmpegPath, log)
 		deps.Media = mediaMgr
 		deps.MediaAdvertiseHost = net.JoinHostPort(cfg.MediaAdvertiseHost, strconv.Itoa(cfg.MediaPort))
+		deps.DeviceTZOffsetHours = cfg.DeviceTZOffsetHours
 		// Recorded clips need the DB to track metadata; only enable when present.
 		if store != nil {
 			clipReg = media.NewClipRegistry(mediaMgr, store, cfg.ClipsRoot, log)
