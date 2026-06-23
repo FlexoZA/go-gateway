@@ -6,6 +6,16 @@ import { useFetch } from "@/lib/useFetch";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 
 type Unit = { serial: string; model: string };
+type Recording = {
+  camera: number;
+  profile: number;
+  start_utc: number;
+  end_utc: number;
+  file_name: string;
+  size: number;
+  device_start: string;
+  device_end: string;
+};
 type Clip = {
   id: number;
   serial: string;
@@ -17,19 +27,18 @@ type Clip = {
   status: string;
   file_size: number;
   bytes_received: number;
-  created_at: string;
+  error?: string;
 };
 
-// Default the request window to the last 1 minute (local time).
-function defaultRange() {
-  const now = new Date();
-  const start = new Date(now.getTime() - 60_000);
-  return { start: toLocalInput(start), end: toLocalInput(now) };
-}
+// datetime-local value (YYYY-MM-DDTHH:mm) in local wall-clock.
 function toLocalInput(d: Date) {
-  // datetime-local wants YYYY-MM-DDTHH:mm in local time.
   const off = d.getTimezoneOffset() * 60_000;
   return new Date(d.getTime() - off).toISOString().slice(0, 16);
+}
+function defaultRange() {
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7 * 86400_000);
+  return { start: toLocalInput(weekAgo), end: toLocalInput(now) };
 }
 
 export default function ClipsPage() {
@@ -39,10 +48,12 @@ export default function ClipsPage() {
 
   const [serial, setSerial] = useState("");
   const [camera, setCamera] = useState(0);
-  const [profile, setProfile] = useState(1);
+  const [profile, setProfile] = useState(0); // most devices record the main stream
   const [start, setStart] = useState(range.start);
   const [end, setEnd] = useState(range.end);
-  const [busy, setBusy] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [recordings, setRecordings] = useState<Recording[] | null>(null);
+  const [requesting, setRequesting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -50,31 +61,52 @@ export default function ClipsPage() {
   const clipList = clips.data?.clips ?? [];
   const effectiveSerial = serial || unitList[0]?.serial || "";
 
-  async function request() {
+  async function findRecordings() {
     setError(null);
     setNotice(null);
+    setRecordings(null);
     if (!effectiveSerial) {
-      setError("No connected device to request from.");
+      setError("No connected device to search.");
       return;
     }
     const startUtc = Math.floor(new Date(start).getTime() / 1000);
     const endUtc = Math.floor(new Date(end).getTime() / 1000);
     if (!startUtc || !endUtc || endUtc <= startUtc) {
-      setError("End time must be after start time.");
+      setError("Search end must be after start.");
       return;
     }
-    setBusy(true);
+    setSearching(true);
+    try {
+      const res = await api<{ recordings: Recording[]; count: number }>(
+        `units/${encodeURIComponent(effectiveSerial)}/recordings?camera=${camera}&profile=${profile}&start_utc=${startUtc}&end_utc=${endUtc}`,
+      );
+      setRecordings(res.recordings);
+      if (res.count === 0) {
+        setNotice("No recordings found for that camera/quality/window. Try the other quality (main vs sub) or a wider date range.");
+      }
+    } catch (e: any) {
+      setError(e.message || "Search failed");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function requestClip(rec: Recording) {
+    setError(null);
+    setNotice(null);
+    const key = `${rec.start_utc}-${rec.end_utc}`;
+    setRequesting(key);
     try {
       await api(`units/${encodeURIComponent(effectiveSerial)}/clips`, {
         method: "POST",
-        body: JSON.stringify({ camera, profile, start_utc: startUtc, end_utc: endUtc }),
+        body: JSON.stringify({ camera: rec.camera, profile: rec.profile, start_utc: rec.start_utc, end_utc: rec.end_utc }),
       });
-      setNotice("Clip requested — the device is uploading it now. It will appear below.");
+      setNotice("Clip requested — the device is uploading it. It will appear in Stored clips below.");
       await clips.refresh();
     } catch (e: any) {
       setError(e.message || "Failed to request clip");
     } finally {
-      setBusy(false);
+      setRequesting(null);
     }
   }
 
@@ -90,60 +122,96 @@ export default function ClipsPage() {
 
   return (
     <div>
-      <PageHeader title="Clips" subtitle="Pull recorded video off a device's SD card and store it on the server" />
+      <PageHeader title="Clips" subtitle="Find footage on a device's SD card and store it on the server" />
       <ErrorBanner message={error || units.error || clips.error} />
       {notice && <div className="mb-4 rounded-md border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200">{notice}</div>}
 
-      <div className="card mb-8 space-y-3">
+      {/* Step 1: search the device for available recordings */}
+      <div className="card mb-6 space-y-3">
         <div className="flex flex-wrap items-end gap-3">
           <div>
             <label className="text-xs text-slate-400">Device</label>
-            <select className="input mt-1 w-56" value={effectiveSerial} onChange={(e) => setSerial(e.target.value)} disabled={busy}>
+            <select className="input mt-1 w-52" value={effectiveSerial} onChange={(e) => setSerial(e.target.value)} disabled={searching}>
               {unitList.length === 0 && <option value="">No connected devices</option>}
               {unitList.map((u) => (
-                <option key={u.serial} value={u.serial}>
-                  {u.serial} ({u.model})
-                </option>
+                <option key={u.serial} value={u.serial}>{u.serial} ({u.model})</option>
               ))}
             </select>
           </div>
           <div>
             <label className="text-xs text-slate-400">Camera</label>
-            <select className="input mt-1 w-36" value={camera} onChange={(e) => setCamera(Number(e.target.value))} disabled={busy}>
-              <option value={0}>Camera 1 (Road)</option>
-              <option value={1}>Camera 2 (Cab)</option>
+            <select className="input mt-1 w-32" value={camera} onChange={(e) => setCamera(Number(e.target.value))} disabled={searching}>
+              <option value={0}>Camera 1</option>
+              <option value={1}>Camera 2</option>
             </select>
           </div>
           <div>
             <label className="text-xs text-slate-400">Quality</label>
-            <select className="input mt-1 w-36" value={profile} onChange={(e) => setProfile(Number(e.target.value))} disabled={busy}>
-              <option value={1}>Low (sub)</option>
+            <select className="input mt-1 w-36" value={profile} onChange={(e) => setProfile(Number(e.target.value))} disabled={searching}>
               <option value={0}>High (main)</option>
+              <option value={1}>Low (sub)</option>
             </select>
           </div>
           <div>
-            <label className="text-xs text-slate-400">Start</label>
-            <input type="datetime-local" className="input mt-1" value={start} onChange={(e) => setStart(e.target.value)} disabled={busy} />
+            <label className="text-xs text-slate-400">From</label>
+            <input type="datetime-local" className="input mt-1" value={start} onChange={(e) => setStart(e.target.value)} disabled={searching} />
           </div>
           <div>
-            <label className="text-xs text-slate-400">End</label>
-            <input type="datetime-local" className="input mt-1" value={end} onChange={(e) => setEnd(e.target.value)} disabled={busy} />
+            <label className="text-xs text-slate-400">To</label>
+            <input type="datetime-local" className="input mt-1" value={end} onChange={(e) => setEnd(e.target.value)} disabled={searching} />
           </div>
-          <button className="btn-primary" onClick={request} disabled={busy || !effectiveSerial}>
-            {busy ? "Requesting…" : "Request clip"}
+          <button className="btn-primary" onClick={findRecordings} disabled={searching || !effectiveSerial}>
+            {searching ? "Searching…" : "Find recordings"}
           </button>
         </div>
         <p className="text-xs text-slate-500">
-          The device reads the footage from its SD card and uploads it to the gateway, which stores it as an .mp4. Larger
-          windows take longer; the clip appears below with live status.
+          The device only has footage for cameras/qualities it was set to record. Pick a recording below to pull it to the server as an .mp4.
         </p>
       </div>
 
+      {/* Step 2: available recordings from the device */}
+      {recordings && recordings.length > 0 && (
+        <div className="card mb-8 overflow-x-auto p-0">
+          <table className="min-w-full divide-y divide-edge">
+            <thead>
+              <tr>
+                <th className="th">Start (device time)</th>
+                <th className="th">End</th>
+                <th className="th">Length</th>
+                <th className="th">Size</th>
+                <th className="th text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-edge">
+              {recordings.map((rec) => {
+                const key = `${rec.start_utc}-${rec.end_utc}`;
+                return (
+                  <tr key={key}>
+                    <td className="td font-mono">{rec.device_start || fmtUtc(rec.start_utc)}</td>
+                    <td className="td font-mono text-slate-400">{rec.device_end || fmtUtc(rec.end_utc)}</td>
+                    <td className="td text-slate-400">{rec.end_utc - rec.start_utc}s</td>
+                    <td className="td text-slate-400">{fmtBytes(rec.size)}</td>
+                    <td className="td">
+                      <div className="flex justify-end">
+                        <button className="btn-primary" disabled={requesting === key} onClick={() => requestClip(rec)}>
+                          {requesting === key ? "Requesting…" : "Pull clip"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Step 3: stored clips */}
       <h2 className="mb-3 text-sm font-semibold text-slate-300">Stored clips</h2>
       {clips.loading && clipList.length === 0 ? (
         <Spinner />
       ) : clipList.length === 0 ? (
-        <Empty>No clips yet. Request one above.</Empty>
+        <Empty>No clips yet. Find a recording above and pull it.</Empty>
       ) : (
         <div className="card overflow-x-auto p-0">
           <table className="min-w-full divide-y divide-edge">
@@ -151,8 +219,8 @@ export default function ClipsPage() {
               <tr>
                 <th className="th">Device</th>
                 <th className="th">Camera</th>
-                <th className="th">Window</th>
-                <th className="th">Duration</th>
+                <th className="th">Window (UTC)</th>
+                <th className="th">Length</th>
                 <th className="th">Status</th>
                 <th className="th">Size</th>
                 <th className="th text-right">Actions</th>
@@ -163,28 +231,22 @@ export default function ClipsPage() {
                 <tr key={c.id}>
                   <td className="td font-mono">{c.serial}</td>
                   <td className="td">Cam {c.camera + 1} · {c.profile === 0 ? "high" : "low"}</td>
-                  <td className="td text-slate-400">
-                    {fmtUtc(c.start_utc)} → {fmtUtc(c.end_utc)}
-                  </td>
+                  <td className="td text-slate-400">{fmtUtc(c.start_utc)} → {fmtUtc(c.end_utc)}</td>
                   <td className="td text-slate-400">{c.duration_secs}s</td>
                   <td className="td">
                     <Badge tone={clipTone(c.status)}>{c.status}</Badge>
                     {c.status === "receiving" && c.bytes_received > 0 && (
                       <span className="ml-2 text-xs text-slate-400">{fmtBytes(c.bytes_received)}</span>
                     )}
-                    {c.status === "error" && <span className="ml-2 text-xs text-rose-300">{(c as any).error}</span>}
+                    {c.status === "error" && c.error && <span className="ml-2 text-xs text-rose-300">{c.error}</span>}
                   </td>
                   <td className="td text-slate-400">{c.file_size > 0 ? fmtBytes(c.file_size) : "—"}</td>
                   <td className="td">
                     <div className="flex justify-end gap-2">
                       {c.status === "ready" && (
-                        <a className="btn-ghost" href={`/api/gw/clips/${c.id}/download`}>
-                          Download
-                        </a>
+                        <a className="btn-ghost" href={`/api/gw/clips/${c.id}/download`}>Download</a>
                       )}
-                      <button className="btn-danger" onClick={() => remove(c.id)}>
-                        Delete
-                      </button>
+                      <button className="btn-danger" onClick={() => remove(c.id)}>Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -208,6 +270,7 @@ function fmtUtc(unix: number): string {
   return new Date(unix * 1000).toLocaleString();
 }
 function fmtBytes(n: number): string {
+  if (!n) return "—";
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
