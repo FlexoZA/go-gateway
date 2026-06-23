@@ -29,7 +29,7 @@ export default function DashboardPage() {
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Connected now" value={connected.length} tone="green" badge="live" />
-        <Stat label="In standby" value={standby} tone="amber" badge="sleep" />
+        <Stat label="In standby" value={standby} tone="amber" badge="standby" />
         <Stat label="Approved devices" value={devices.data?.devices?.length ?? "—"} tone="indigo" badge="registry" />
         <Stat label="Pending approval" value={pending.data?.devices?.length ?? "—"} tone="amber" badge="pending" />
       </div>
