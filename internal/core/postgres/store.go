@@ -24,10 +24,6 @@ import (
 // trigger whenever a mapping row is inserted, updated, or deleted.
 const mappingChangeChannel = "event_mappings_changed"
 
-// workflowChangeChannel is the LISTEN/NOTIFY channel fired by the
-// mapping_workflows trigger whenever a per-model workflow changes.
-const workflowChangeChannel = "mapping_workflows_changed"
-
 // settingsChangeChannel is the LISTEN/NOTIFY channel fired by the server_settings
 // trigger whenever a setting changes.
 const settingsChangeChannel = "server_settings_changed"
@@ -136,32 +132,6 @@ var schema = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS device_errors_serial_created_at ON device_errors (serial, created_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS device_errors_category ON device_errors (error_category)`,
-	// Per-model device-mapping workflows: the visual ("N8N-style") node graph that
-	// maps a model's incoming frames to event codes. Strictly per (unit, model) —
-	// a device uses its own model's active workflow or none. `graph` is the React
-	// Flow node/edge JSON the engine (internal/core/flow) interprets.
-	`CREATE TABLE IF NOT EXISTS mapping_workflows (
-		id         BIGSERIAL PRIMARY KEY,
-		unit       TEXT NOT NULL,
-		model      TEXT NOT NULL,
-		name       TEXT NOT NULL DEFAULT '',
-		graph      JSONB NOT NULL DEFAULT '{"nodes":[],"edges":[]}',
-		is_active  BOOLEAN NOT NULL DEFAULT true,
-		updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-		UNIQUE (unit, model)
-	)`,
-	// Hot-reload: fire a NOTIFY (carrying the unit) on any change so gateways
-	// reload workflows instantly, exactly like event_mappings.
-	`CREATE OR REPLACE FUNCTION notify_mapping_workflows_changed() RETURNS trigger AS $$
-	BEGIN
-		PERFORM pg_notify('mapping_workflows_changed', COALESCE(NEW.unit, OLD.unit));
-		RETURN NULL;
-	END;
-	$$ LANGUAGE plpgsql`,
-	`DROP TRIGGER IF EXISTS mapping_workflows_notify ON mapping_workflows`,
-	`CREATE TRIGGER mapping_workflows_notify
-		AFTER INSERT OR UPDATE OR DELETE ON mapping_workflows
-		FOR EACH ROW EXECUTE FUNCTION notify_mapping_workflows_changed()`,
 	// Canonical ACM Standard Event Codes — the picklist the front end offers when
 	// choosing an event_code. Seeded on startup from the embedded CSV
 	// (internal/core/eventcodes); rows not in the CSV are preserved so custom
@@ -406,7 +376,7 @@ func (s *Store) ListenForMappingChanges(ctx context.Context, onChange func(unit 
 
 // listenChannel hijacks a pooled connection, LISTENs on the given channel, calls
 // onChange once on connect (resync) and again on every notification. Returns on
-// error so the caller can reconnect. Shared by the mapping and workflow channels.
+// error so the caller can reconnect. Shared by the mapping/settings channels.
 func (s *Store) listenChannel(ctx context.Context, channel string, onChange func(payload string)) error {
 	pooled, err := s.pool.Acquire(ctx)
 	if err != nil {

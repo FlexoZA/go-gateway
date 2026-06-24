@@ -7,7 +7,7 @@
 //
 // Unit-specific wiring is reached only through optional interfaces a Protocol may
 // implement (gateway.DefaultPort for its port, gateway.MappingProvider for editable
-// event mappings/workflows, gateway.ConfigurableUnit for unit-type settings,
+// event mappings, gateway.ConfigurableUnit for unit-type settings,
 // gateway.MediaServerProvider for a device-side media listener, gateway.
 // IdleTimeoutProvider for a custom read deadline); a unit that implements none —
 // e.g. a plain GPS tracker — gets none of that machinery.
@@ -175,7 +175,7 @@ func (a *App) newUnitRuntime(proto gateway.Protocol, baseDeps gateway.Deps) *uni
 		a.log.Info(map[string]any{"event": "video_enabled", "unit": u.name, "advertise": u.deps.MediaAdvertiseHost})
 	}
 
-	// Editable mappings / per-model workflows.
+	// Editable code→event mappings.
 	if mp, ok := proto.(gateway.MappingProvider); ok {
 		u.mp = mp
 	}
@@ -348,7 +348,7 @@ func (a *App) anyMedia() *unitRuntime {
 }
 
 // startStoreBackedServices wires everything that needs the database: per-unit
-// editable mappings/workflows + unit settings (each with instant LISTEN/NOTIFY
+// editable mappings + unit settings (each with instant LISTEN/NOTIFY
 // reload), and the global event-code picklist, telemetry webhooks, and live server
 // settings.
 func (a *App) startStoreBackedServices(ctx context.Context) {
@@ -365,12 +365,6 @@ func (a *App) startStoreBackedServices(ctx context.Context) {
 			if a.cfg.MappingRefreshSeconds > 0 {
 				go a.refreshMappings(ctx, u, time.Duration(a.cfg.MappingRefreshSeconds)*time.Second)
 			}
-			a.loadWorkflows(ctx, u)
-			go a.store.ListenForWorkflowChanges(ctx, func(changed string) {
-				if changed == "" || changed == u.name {
-					a.loadWorkflows(ctx, u)
-				}
-			})
 		}
 		if u.cfgUnit != nil {
 			a.seedAndLoadUnitSettings(ctx, u)
@@ -512,19 +506,6 @@ func (a *App) reloadMappings(ctx context.Context, u *unitRuntime) {
 	}
 	u.mp.ApplyMappings(loaded)
 	a.log.Debug(map[string]any{"event": "mappings_reloaded", "unit": u.name, "map_types": len(loaded)})
-}
-
-// loadWorkflows loads a unit's active per-model workflows and installs them.
-func (a *App) loadWorkflows(ctx context.Context, u *unitRuntime) {
-	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	wf, err := a.store.LoadActiveWorkflows(cctx, u.name)
-	if err != nil {
-		a.log.Debug(map[string]any{"event": "workflow_load_failed", "unit": u.name, "error": err.Error()})
-		return
-	}
-	u.mp.ApplyWorkflows(wf)
-	a.log.Info(map[string]any{"event": "workflows_loaded", "unit": u.name, "models": u.mp.WorkflowModelCount()})
 }
 
 // refreshMappings periodically reloads a unit's mappings as a safety net behind

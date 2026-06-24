@@ -60,19 +60,6 @@ func (f *fakeData) DeleteEventMapping(_ context.Context, _, _ string, code int) 
 	f.deletedMap = true
 	return nil
 }
-func (f *fakeData) ListWorkflows(context.Context, string) ([]map[string]any, error) {
-	return []map[string]any{}, nil
-}
-func (f *fakeData) GetWorkflow(_ context.Context, _, model string) (map[string]any, error) {
-	if model == "missing" {
-		return nil, errMissing
-	}
-	return map[string]any{"model": model}, nil
-}
-func (f *fakeData) UpsertWorkflow(_ context.Context, _, _, _ string, _ json.RawMessage, _ bool) error {
-	return nil
-}
-func (f *fakeData) DeleteWorkflow(context.Context, string, string) error { return nil }
 func (f *fakeData) ListGatewayErrors(context.Context, int, int) ([]map[string]any, error) {
 	return []map[string]any{}, nil
 }
@@ -249,28 +236,6 @@ func TestDeleteMapping(t *testing.T) {
 	}
 	if rec := do(s, "DELETE", "/api/mappings?code=34", ""); rec.Code != 400 {
 		t.Fatalf("delete no map_type = %d, want 400", rec.Code)
-	}
-}
-
-func TestWorkflowEndpoints(t *testing.T) {
-	s := newAdminServer(&fakeData{})
-	graph := `{"nodes":[{"id":"in","type":"input"},{"id":"ev","type":"setEvent","data":{"event":"X"}},{"id":"o","type":"output"}],"edges":[{"id":"a","source":"in","target":"ev"},{"id":"b","source":"ev","target":"o"}]}`
-
-	// dry-run a valid graph → 200 with the event in the trace/result.
-	if rec := do(s, "POST", "/api/workflows/test", `{"graph":`+graph+`,"payload":{}}`); rec.Code != 200 || !strings.Contains(rec.Body.String(), "\"X\"") {
-		t.Fatalf("test endpoint = %d (%s)", rec.Code, rec.Body)
-	}
-	// graph with no input node → 400.
-	if rec := do(s, "POST", "/api/workflows/test", `{"graph":{"nodes":[],"edges":[]}}`); rec.Code != 400 {
-		t.Fatalf("invalid graph = %d, want 400", rec.Code)
-	}
-	// upsert → 200.
-	if rec := do(s, "PUT", "/api/workflows/Hero-MC30", `{"name":"x","graph":`+graph+`}`); rec.Code != 200 {
-		t.Fatalf("upsert = %d (%s)", rec.Code, rec.Body)
-	}
-	// get a missing model → 404.
-	if rec := do(s, "GET", "/api/workflows/missing", ""); rec.Code != 404 {
-		t.Fatalf("get missing = %d, want 404", rec.Code)
 	}
 }
 

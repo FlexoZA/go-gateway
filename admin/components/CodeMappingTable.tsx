@@ -6,9 +6,8 @@ import { useFetch } from "@/lib/useFetch";
 import { Empty, ErrorBanner, Spinner } from "@/components/ui";
 import { EventCodeDatalist } from "@/components/EventCodeDatalist";
 
-// CodeMappingTable is the simple code→event lookup editor (the original mapping
-// method): a flat, per-unit table editable inline, applied to the gateway
-// instantly. The visual workflow editor is the alternative method.
+// CodeMappingTable is the code→event lookup editor: a flat, per-unit table
+// editable inline, applied to the running gateway instantly.
 
 type Mapping = {
   id: number;

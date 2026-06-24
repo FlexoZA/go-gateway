@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dfm/device-gateway/internal/core/flow"
 	"github.com/dfm/device-gateway/internal/core/gateway"
 	"github.com/dfm/device-gateway/internal/core/logging"
 	"github.com/dfm/device-gateway/internal/core/mapping"
@@ -47,11 +46,6 @@ type DataStore interface {
 	ListEventMappings(ctx context.Context, unit string) ([]map[string]any, error)
 	UpsertEventMapping(ctx context.Context, unit string, e mapping.Entry) error
 	DeleteEventMapping(ctx context.Context, unit, mapType string, code int) error
-
-	ListWorkflows(ctx context.Context, unit string) ([]map[string]any, error)
-	GetWorkflow(ctx context.Context, unit, model string) (map[string]any, error)
-	UpsertWorkflow(ctx context.Context, unit, model, name string, graph json.RawMessage, isActive bool) error
-	DeleteWorkflow(ctx context.Context, unit, model string) error
 
 	ListGatewayErrors(ctx context.Context, limit, offset int) ([]map[string]any, error)
 	ListDeviceErrors(ctx context.Context, limit, offset int) ([]map[string]any, error)
@@ -291,13 +285,6 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		"GET /api/mappings":    s.handleListMappings,
 		"PUT /api/mappings":    s.handleUpsertMapping,
 		"DELETE /api/mappings": s.handleDeleteMapping,
-
-		// Per-model visual mapping workflows (N8N-style).
-		"GET /api/workflows":            s.handleListWorkflows,
-		"POST /api/workflows/test":      s.handleTestWorkflow,
-		"GET /api/workflows/{model}":    s.handleGetWorkflow,
-		"PUT /api/workflows/{model}":    s.handleUpsertWorkflow,
-		"DELETE /api/workflows/{model}": s.handleDeleteWorkflow,
 
 		// Editable server settings (global).
 		"GET /api/settings": s.handleListSettings,
@@ -1311,141 +1298,6 @@ func (s *Server) handleDeleteMapping(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": map[string]any{"unit": unit, "map_type": mapType, "code": code}})
-}
-
-// GET /api/workflows — per-model workflow summaries for this unit.
-func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
-	if !s.dataReady(w) {
-		return
-	}
-	unit, ok := s.requireUnit(w, r)
-	if !ok {
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	rows, err := s.data.ListWorkflows(ctx, unit)
-	if err != nil {
-		s.dataError(w, "list_workflows", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"unit": unit, "workflows": rows})
-}
-
-// GET /api/workflows/{model} — one model's full workflow (graph included).
-func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
-	if !s.dataReady(w) {
-		return
-	}
-	unit, ok := s.requireUnit(w, r)
-	if !ok {
-		return
-	}
-	model := r.PathValue("model")
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	wf, err := s.data.GetWorkflow(ctx, unit, model)
-	if err != nil {
-		if err.Error() == notFoundMsg {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no workflow for this model"})
-			return
-		}
-		s.dataError(w, "get_workflow", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, wf)
-}
-
-// PUT /api/workflows/{model} — create or replace a model's workflow. The store
-// validates the graph; a structurally invalid graph returns 400.
-func (s *Server) handleUpsertWorkflow(w http.ResponseWriter, r *http.Request) {
-	if !s.dataReady(w) {
-		return
-	}
-	unit, ok := s.requireUnit(w, r)
-	if !ok {
-		return
-	}
-	model := r.PathValue("model")
-	var body struct {
-		Name     string          `json:"name"`
-		Graph    json.RawMessage `json:"graph"`
-		IsActive *bool           `json:"is_active"`
-	}
-	if err := decodeJSON(w, r, &body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
-		return
-	}
-	if len(body.Graph) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": `"graph" is required`})
-		return
-	}
-	active := true
-	if body.IsActive != nil {
-		active = *body.IsActive
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	if err := s.data.UpsertWorkflow(ctx, unit, model, body.Name, body.Graph, active); err != nil {
-		if isValidationErr(err) {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-			return
-		}
-		s.dataError(w, "upsert_workflow", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "unit": unit, "model": model, "is_active": active})
-}
-
-// DELETE /api/workflows/{model} — remove a model's workflow.
-func (s *Server) handleDeleteWorkflow(w http.ResponseWriter, r *http.Request) {
-	if !s.dataReady(w) {
-		return
-	}
-	unit, ok := s.requireUnit(w, r)
-	if !ok {
-		return
-	}
-	model := r.PathValue("model")
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	if err := s.data.DeleteWorkflow(ctx, unit, model); err != nil {
-		if err.Error() == notFoundMsg {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no workflow for this model"})
-			return
-		}
-		s.dataError(w, "delete_workflow", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": model})
-}
-
-// POST /api/workflows/test — dry-run a graph against a sample payload. Pure
-// compute (no database), so the editor can preview results before saving.
-func (s *Server) handleTestWorkflow(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Graph   json.RawMessage `json:"graph"`
-		Payload map[string]any  `json:"payload"`
-	}
-	if err := decodeJSON(w, r, &body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
-		return
-	}
-	var g flow.Graph
-	if err := json.Unmarshal(body.Graph, &g); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid graph JSON"})
-		return
-	}
-	if err := g.Validate(); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
-	res, err := g.Evaluate(body.Payload)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
 }
 
 // GET /api/settings — all editable server settings.

@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/dfm/device-gateway/internal/core/device"
-	"github.com/dfm/device-gateway/internal/core/flow"
 	"github.com/dfm/device-gateway/internal/core/gateway"
 	"github.com/dfm/device-gateway/internal/core/mapping"
 )
@@ -98,11 +97,9 @@ func (*Protocol) SettingsSchema() []gateway.SettingField {
 // MappingProvider: the provisional alarm/language code → event mapping is editable
 // from the admin (map type "alarm_former"). These thin methods let the app runner
 // seed and apply mappings without importing this package; they delegate to the
-// package-level mapping state. FleeTiger has no per-model workflows.
-func (*Protocol) DefaultMappingEntries() []mapping.Entry  { return DefaultMappingEntries() }
-func (*Protocol) ApplyMappings(t mapping.Table)           { ApplyMappings(t) }
-func (*Protocol) ApplyWorkflows(_ map[string]*flow.Graph) {}
-func (*Protocol) WorkflowModelCount() int                 { return 0 }
+// package-level mapping state.
+func (*Protocol) DefaultMappingEntries() []mapping.Entry { return DefaultMappingEntries() }
+func (*Protocol) ApplyMappings(t mapping.Table)          { ApplyMappings(t) }
 
 // ReadFrame decodes exactly one GT06 frame from the stream. It first resyncs to
 // the 0x78 0x78 start marker (discarding any inter-frame noise), reads the length

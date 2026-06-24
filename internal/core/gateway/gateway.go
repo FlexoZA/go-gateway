@@ -16,7 +16,6 @@ import (
 
 	"github.com/dfm/device-gateway/internal/core/config"
 	"github.com/dfm/device-gateway/internal/core/device"
-	"github.com/dfm/device-gateway/internal/core/flow"
 	"github.com/dfm/device-gateway/internal/core/logging"
 	"github.com/dfm/device-gateway/internal/core/mapping"
 	"github.com/dfm/device-gateway/internal/core/media"
@@ -103,16 +102,14 @@ type EffectiveCapabilities struct {
 	HasMappings bool `json:"has_mappings"` // unit implements MappingProvider
 }
 
-// MappingProvider is implemented by a Protocol whose event output is driven by
-// editable code→event mappings and/or per-model workflows. The app runner uses it
-// to seed defaults, apply the DB-loaded set, and apply workflows WITHOUT importing
-// the unit package. A unit with no editable mappings (e.g. a plain GPS tracker)
-// does not implement it, and the runner skips all mapping/workflow wiring.
+// MappingProvider is implemented by a Protocol whose event output is driven by an
+// editable code→event mapping table. The app runner uses it to seed the built-in
+// defaults and apply the DB-loaded set WITHOUT importing the unit package. A unit
+// with no editable mappings (e.g. a plain GPS tracker) does not implement it, and
+// the runner skips all mapping wiring.
 type MappingProvider interface {
 	DefaultMappingEntries() []mapping.Entry
 	ApplyMappings(mapping.Table)
-	ApplyWorkflows(map[string]*flow.Graph)
-	WorkflowModelCount() int
 }
 
 // MediaListener is a device-side media accept loop (a separate TCP port from the

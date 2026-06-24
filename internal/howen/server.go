@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/dfm/device-gateway/internal/core/device"
-	"github.com/dfm/device-gateway/internal/core/flow"
 	"github.com/dfm/device-gateway/internal/core/gateway"
 	"github.com/dfm/device-gateway/internal/core/mapping"
 )
@@ -50,15 +49,13 @@ func (*Protocol) Capabilities() gateway.Capabilities {
 // set. Lets one gateway process host Howen alongside other units.
 func (*Protocol) DefaultDevicePort() int { return 33000 }
 
-// MappingProvider: the Howen unit drives its event output from editable code→event
-// mappings and per-model workflows. These thin methods let the app runner seed,
-// load, and apply them without importing this package; they delegate to the
-// package-level mapping state (one process per unit, so a singleton is equivalent
-// to instance state and the hot read path stays untouched).
-func (*Protocol) DefaultMappingEntries() []mapping.Entry  { return DefaultMappingEntries() }
-func (*Protocol) ApplyMappings(t mapping.Table)           { ApplyMappings(t) }
-func (*Protocol) ApplyWorkflows(m map[string]*flow.Graph) { ApplyWorkflows(m) }
-func (*Protocol) WorkflowModelCount() int                 { return WorkflowModelCount() }
+// MappingProvider: the Howen unit drives its event output from an editable
+// code→event mapping table. These thin methods let the app runner seed and apply
+// it without importing this package; they delegate to the package-level mapping
+// state (a singleton, equivalent to instance state here, keeping the hot read path
+// untouched).
+func (*Protocol) DefaultMappingEntries() []mapping.Entry { return DefaultMappingEntries() }
+func (*Protocol) ApplyMappings(t mapping.Table)          { ApplyMappings(t) }
 
 // ReadFrame decodes one H-Protocol frame from the stream.
 func (*Protocol) ReadFrame(r *bufio.Reader) (gateway.Frame, error) {
@@ -362,12 +359,9 @@ func (s *session) handleAlarmData(ctx context.Context, payload []byte) error {
 		s.recordStatus(parsed.Status)
 	}
 	p := buildEventPayload(parsed, s.imei)
-	// A model-specific visual workflow, if defined, overrides the built-in
-	// table mapping (strictly per model — see internal/howen/workflows.go).
-	usedWorkflow := applyModelWorkflow(s.model, parsed, p)
 	s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{
 		"event": "alarm_forward", "serial": s.serial, "ec": parsed.EC,
-		"mapped_events": p["event"], "workflow": usedWorkflow, "model": s.model,
+		"mapped_events": p["event"], "model": s.model,
 	})
 	s.conn.Emit(s.serial, "howen", s.model, "event", p)
 	return nil
