@@ -96,6 +96,15 @@ const (
 // satisfies DataStore structurally). Handlers compare by message.
 const notFoundMsg = "not found"
 
+// Per-unit port settings live in the global server_settings table, namespaced by
+// unit so each listener (and a video unit's media port) has its own admin-editable
+// port. The *Active keys record the port the gateway actually bound on startup, so
+// the panel can flag a pending restart. Shared with the app runner.
+func DevicePortKey(unit string) string       { return "device_port:" + unit }
+func DevicePortActiveKey(unit string) string { return "device_port_active:" + unit }
+func MediaPortKey(unit string) string        { return "media_port:" + unit }
+func MediaPortActiveKey(unit string) string  { return "media_port_active:" + unit }
+
 // UnitInfo describes one hosted unit type for the admin panel: its name, the
 // effective capabilities it offers right now, and (optionally) its editable
 // settings schema. The gateway hosts one or more of these.
@@ -249,6 +258,11 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		"GET /api/unit-types/{unit}/settings/schema": s.handleUnitSettingsSchema,
 		"GET /api/unit-types/{unit}/settings":        s.handleListUnitSettings,
 		"PUT /api/unit-types/{unit}/settings":        s.handleSetUnitSetting,
+
+		// Per-unit listener ports (device port, plus media port for video units).
+		// Applied on restart — a bound TCP listener can't move at runtime.
+		"GET /api/unit-types/{unit}/ports": s.handleGetPorts,
+		"PUT /api/unit-types/{unit}/ports": s.handleSetPorts,
 
 		// Telemetry webhooks (the GPS/event data sinks).
 		"GET /api/webhooks":         s.handleListWebhooks,
@@ -1501,6 +1515,97 @@ func (s *Server) handleSetUnitSetting(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "unit": u.Name, "key": key})
 }
+
+// GET /api/unit-types/{unit}/ports — a unit's configured and active listener
+// ports. device_port is the TCP port devices dial; for video units media_port is
+// the device-side media port. The *_active values are what the gateway bound on
+// startup (configured ≠ active ⇒ a restart is pending).
+func (s *Server) handleGetPorts(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.unitInfo(r.PathValue("unit"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown unit"})
+		return
+	}
+	if !s.dataReady(w) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	rows, err := s.data.ListSettings(ctx)
+	if err != nil {
+		s.dataError(w, "list_ports", err)
+		return
+	}
+	m := map[string]string{}
+	for _, row := range rows {
+		k, _ := row["key"].(string)
+		v, _ := row["value"].(string)
+		m[k] = v
+	}
+	resp := map[string]any{
+		"unit":               u.Name,
+		"has_video":          u.Caps.HasVideo,
+		"device_port":        m[DevicePortKey(u.Name)],
+		"device_port_active": m[DevicePortActiveKey(u.Name)],
+	}
+	if u.Caps.HasVideo {
+		resp["media_port"] = m[MediaPortKey(u.Name)]
+		resp["media_port_active"] = m[MediaPortActiveKey(u.Name)]
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// PUT /api/unit-types/{unit}/ports {"device_port":33000,"media_port":33001} — set
+// a unit's ports. Takes effect on the next gateway restart (and, in Docker, the
+// published port mapping must be updated to match). media_port is rejected for a
+// unit without video.
+func (s *Server) handleSetPorts(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.unitInfo(r.PathValue("unit"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown unit"})
+		return
+	}
+	if !s.dataReady(w) {
+		return
+	}
+	var body struct {
+		DevicePort *int `json:"device_port"`
+		MediaPort  *int `json:"media_port"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if body.DevicePort != nil {
+		if !validPort(*body.DevicePort) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "device_port must be between 1 and 65535"})
+			return
+		}
+		if err := s.data.SetSetting(ctx, DevicePortKey(u.Name), itoa(*body.DevicePort)); err != nil {
+			s.dataError(w, "set_device_port", err)
+			return
+		}
+	}
+	if body.MediaPort != nil {
+		if !u.Caps.HasVideo {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unit has no video — media_port not applicable"})
+			return
+		}
+		if !validPort(*body.MediaPort) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "media_port must be between 1 and 65535"})
+			return
+		}
+		if err := s.data.SetSetting(ctx, MediaPortKey(u.Name), itoa(*body.MediaPort)); err != nil {
+			s.dataError(w, "set_media_port", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "unit": u.Name})
+}
+
+func validPort(p int) bool { return p >= 1 && p <= 65535 }
 
 // unitSettingField finds a schema field by key.
 func unitSettingField(schema []gateway.SettingField, key string) (gateway.SettingField, bool) {

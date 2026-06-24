@@ -40,16 +40,17 @@ import (
 // the runner wires around it. deps is a clone of the shared base deps with this
 // unit's listen port (and, for a video unit, its media manager/clips) set.
 type unitRuntime struct {
-	proto    gateway.Protocol
-	name     string
-	port     int
-	deps     gateway.Deps
-	caps     gateway.EffectiveCapabilities
-	mp       gateway.MappingProvider  // nil unless the unit has editable mappings
-	cfgUnit  gateway.ConfigurableUnit // nil unless the unit declares settings
-	settings *gateway.UnitSettings    // non-nil iff cfgUnit != nil
-	media    *media.Manager           // nil unless a video unit with video enabled
-	clips    *media.ClipRegistry      // nil unless a video unit with a database
+	proto     gateway.Protocol
+	name      string
+	port      int
+	mediaPort int // device-side media port (video units only)
+	deps      gateway.Deps
+	caps      gateway.EffectiveCapabilities
+	mp        gateway.MappingProvider  // nil unless the unit has editable mappings
+	cfgUnit   gateway.ConfigurableUnit // nil unless the unit declares settings
+	settings  *gateway.UnitSettings    // non-nil iff cfgUnit != nil
+	media     *media.Manager           // nil unless a video unit with video enabled
+	clips     *media.ClipRegistry      // nil unless a video unit with a database
 }
 
 // App holds the composed gateway and every long-lived dependency.
@@ -136,20 +137,9 @@ func New(protos ...gateway.Protocol) *App {
 		log.Info(map[string]any{"event": "telemetry_sink_pending", "detail": "no webhook URL yet; set it in Server Settings or DEVICE_WEBHOOK_URL"})
 	}
 
-	// Build a runtime per unit type.
+	// Build a runtime per unit type. Each resolves its own admin-editable port.
 	for _, proto := range protos {
 		a.units = append(a.units, a.newUnitRuntime(proto, baseDeps))
-	}
-
-	// Back-compat: in single-unit mode the admin-editable device_port setting may
-	// override the resolved port. Ambiguous with several listeners, so multi-unit
-	// uses <UNIT>_PORT / DefaultDevicePort only.
-	if len(a.units) == 1 && a.store != nil {
-		u := a.units[0]
-		if p := a.resolveStoredDevicePort(u.port); p != u.port {
-			u.port = p
-			u.deps.Config.ListenPort = p
-		}
 	}
 
 	return a
@@ -170,9 +160,10 @@ func (a *App) newUnitRuntime(proto gateway.Protocol, baseDeps gateway.Deps) *uni
 	// when video is enabled (a media advertise host is configured). Today only the
 	// howen unit qualifies; a GPS-only unit's deps.Media stays nil.
 	if _, ok := proto.(gateway.MediaServerProvider); ok && a.cfg.VideoEnabled() {
+		u.mediaPort = a.resolveStoredPort(httpapi.MediaPortKey(u.name), a.cfg.MediaPort)
 		u.media = media.NewManager(a.cfg.HLSRoot, a.cfg.FFmpegPath, a.log)
 		u.deps.Media = u.media
-		u.deps.MediaAdvertiseHost = net.JoinHostPort(a.cfg.MediaAdvertiseHost, strconv.Itoa(a.cfg.MediaPort))
+		u.deps.MediaAdvertiseHost = net.JoinHostPort(a.cfg.MediaAdvertiseHost, strconv.Itoa(u.mediaPort))
 		u.deps.DeviceTZOffsetHours = a.cfg.DeviceTZOffsetHours
 		if a.store != nil {
 			u.clips = media.NewClipRegistry(u.media, a.store, a.cfg.ClipsRoot, a.log)
@@ -207,43 +198,46 @@ func (a *App) newUnitRuntime(proto gateway.Protocol, baseDeps gateway.Deps) *uni
 	return u
 }
 
-// resolveUnitPort picks a unit's device TCP port: <UNITNAME>_PORT env →
-// DefaultDevicePort() → the generic LISTEN_PORT. In single-unit mode with a
-// database, the stored device_port server setting may further override it (the
-// admin-editable port, applied on restart) for backward compatibility.
+// resolveUnitPort picks a unit's device TCP port: the admin-editable per-unit
+// device_port setting (if present) → <UNITNAME>_PORT env → DefaultDevicePort() →
+// the generic LISTEN_PORT. The stored setting is seeded from the env/default on
+// first run, then becomes the source of truth (applied on restart).
 func (a *App) resolveUnitPort(proto gateway.Protocol) int {
-	port := a.cfg.ListenPort
+	base := a.cfg.ListenPort
 	if dp, ok := proto.(gateway.DefaultPort); ok {
-		port = dp.DefaultDevicePort()
+		base = dp.DefaultDevicePort()
 	}
 	if v := strings.TrimSpace(os.Getenv(strings.ToUpper(proto.Name()) + "_PORT")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 65535 {
-			port = n
+			base = n
 		} else {
-			a.log.Error(map[string]any{"event": "unit_port_invalid", "unit": proto.Name(), "value": v, "fallback": port})
+			a.log.Error(map[string]any{"event": "unit_port_invalid", "unit": proto.Name(), "value": v, "fallback": base})
 		}
 	}
-	return port
+	return a.resolveStoredPort(httpapi.DevicePortKey(proto.Name()), base)
 }
 
-// resolveStoredDevicePort honors the admin-editable device_port setting, but only
-// in single-unit mode (the setting is single-valued and would be ambiguous across
-// several listeners). Applied at startup; an invalid value falls back to envPort.
-func (a *App) resolveStoredDevicePort(envPort int) int {
+// resolveStoredPort seeds a port setting from base on first run and returns the
+// stored value (admin-editable, applied on restart), falling back to base when
+// there's no database or the stored value is invalid.
+func (a *App) resolveStoredPort(key string, base int) int {
+	if a.store == nil {
+		return base
+	}
 	cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = a.store.SeedSettingDefault(cctx, postgres.SettingDevicePort, strconv.Itoa(envPort))
-	v, ok, err := a.store.GetSetting(cctx, postgres.SettingDevicePort)
+	_ = a.store.SeedSettingDefault(cctx, key, strconv.Itoa(base))
+	v, ok, err := a.store.GetSetting(cctx, key)
 	if err != nil || !ok {
-		return envPort
+		return base
 	}
 	p, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || p < 1 || p > 65535 {
-		a.log.Error(map[string]any{"event": "device_port_invalid", "value": v, "fallback": envPort})
-		return envPort
+		a.log.Error(map[string]any{"event": "port_setting_invalid", "key": key, "value": v, "fallback": base})
+		return base
 	}
-	if p != envPort {
-		a.log.Info(map[string]any{"event": "device_port_override", "configured": p, "env": envPort})
+	if p != base {
+		a.log.Info(map[string]any{"event": "port_override", "key": key, "configured": p, "base": base})
 	}
 	return p
 }
@@ -280,7 +274,7 @@ func (a *App) Run() error {
 		if !ok {
 			continue
 		}
-		ms := msp.NewMediaServer(net.JoinHostPort(a.cfg.ListenHost, strconv.Itoa(a.cfg.MediaPort)), u.media, u.clips, a.log)
+		ms := msp.NewMediaServer(net.JoinHostPort(a.cfg.ListenHost, strconv.Itoa(u.mediaPort)), u.media, u.clips, a.log)
 		go func(ms gateway.MediaListener, name string) {
 			if err := ms.ListenAndServe(ctx); err != nil {
 				a.log.Error(map[string]any{"event": "media_fatal", "unit": name, "error": err.Error()})
@@ -400,12 +394,16 @@ func (a *App) startStoreBackedServices(ctx context.Context) {
 	a.applyWebhooks(ctx)
 	go a.store.ListenForWebhookChanges(ctx, func(string) { a.applyWebhooks(ctx) })
 
-	// Record the bound port(s) so the panel can flag a pending restart when the
-	// configured port differs from the running one. Single-valued setting, so only
-	// meaningful in single-unit mode.
-	if len(a.units) == 1 {
-		if err := a.store.SetSetting(ctx, postgres.SettingDevicePortActive, strconv.Itoa(a.units[0].port)); err != nil {
-			a.log.Debug(map[string]any{"event": "device_port_active_write_failed", "error": err.Error()})
+	// Record each unit's bound port(s) so the panel can flag a pending restart when
+	// the configured port differs from the running one.
+	for _, u := range a.units {
+		if err := a.store.SetSetting(ctx, httpapi.DevicePortActiveKey(u.name), strconv.Itoa(u.port)); err != nil {
+			a.log.Debug(map[string]any{"event": "device_port_active_write_failed", "unit": u.name, "error": err.Error()})
+		}
+		if u.media != nil {
+			if err := a.store.SetSetting(ctx, httpapi.MediaPortActiveKey(u.name), strconv.Itoa(u.mediaPort)); err != nil {
+				a.log.Debug(map[string]any{"event": "media_port_active_write_failed", "unit": u.name, "error": err.Error()})
+			}
 		}
 	}
 
