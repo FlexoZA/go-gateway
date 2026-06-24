@@ -166,6 +166,11 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		log.Debug(map[string]any{"event": "packet_parse_error", "remote": s.conn.RemoteAddr().String(), "error": err.Error()})
 		return nil // drop the packet, keep the connection
 	}
+	// Frame-level visibility for the live log: every structurally-valid frame, its
+	// protocol number, content length, and CRC result. Lets us see exactly what a
+	// device transmits (incl. unhandled/extended GT06 variants).
+	log.Debug(map[string]any{"event": "frame", "serial": s.serialOrUnknown(), "protocol": parsed.Protocol, "len": len(parsed.Content), "crc_ok": parsed.CRCValid})
+
 	if !parsed.CRCValid {
 		log.Debug(map[string]any{"event": "crc_mismatch", "serial": s.serialOrUnknown(), "protocol": parsed.Protocol})
 		return nil // CRC failures are discarded per spec §4.6
@@ -211,6 +216,11 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 			})
 			s.conn.Emit(s.serial, deviceMake, deviceModel, "event", buildLocationPayload(s.serial, parsed))
 		}
+	default:
+		// Not login/location/heartbeat/alarm — e.g. an extended GT06 location
+		// variant (0x22/0x26/…) this parser doesn't decode yet. Dump the raw frame
+		// so it can be identified and a parse branch added.
+		log.Debug(map[string]any{"event": "unhandled_protocol", "serial": s.serialOrUnknown(), "protocol": parsed.Protocol, "hex": fmt.Sprintf("%x", f.Payload)})
 	}
 	return nil
 }
