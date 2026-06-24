@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/dfm/device-gateway/internal/core/device"
@@ -20,6 +21,27 @@ import (
 	"github.com/dfm/device-gateway/internal/core/gateway"
 	"github.com/dfm/device-gateway/internal/core/mapping"
 )
+
+// ignitionTracker remembers each device's last-known ACC state, keyed by serial,
+// ACROSS reconnects — GT06 units drop and reconnect on an ACC change, so a
+// per-connection baseline would miss the transition. The first observation of a
+// device establishes its baseline silently; subsequent changes (even across a new
+// connection) emit an event. Reset on a gateway restart, so the first reading
+// after a restart re-baselines silently (we don't know the pre-restart state).
+var ignitionTracker = struct {
+	mu sync.Mutex
+	m  map[string]int
+}{m: map[string]int{}}
+
+// observeIgnition records serial's new ACC state and returns the previous state
+// and whether one was known.
+func observeIgnition(serial string, acc int) (prev int, known bool) {
+	ignitionTracker.mu.Lock()
+	defer ignitionTracker.mu.Unlock()
+	prev, known = ignitionTracker.m[serial]
+	ignitionTracker.m[serial] = acc
+	return prev, known
+}
 
 // settingTimezoneOffset is the unit-settings key for the device's local-clock
 // offset from UTC (GT06 sends wall-clock with no timezone).
@@ -132,7 +154,7 @@ func syncToStart(r *bufio.Reader) error {
 }
 
 func (*Protocol) NewSession(c *gateway.Conn) gateway.Session {
-	return &session{conn: c, ignition: -1}
+	return &session{conn: c}
 }
 
 type gateStatus int
@@ -147,9 +169,6 @@ type session struct {
 	conn   *gateway.Conn
 	serial string // the device IMEI, established by the login packet
 	gate   gateStatus
-	// ignition is the last-known ACC state (-1 unknown, 0 off, 1 on), used to emit
-	// IGNITION:ON/OFF events only on a transition.
-	ignition int
 }
 
 // OnFrame parses a frame, ACKs it when the protocol requires, and forwards
@@ -319,17 +338,16 @@ func (s *session) SendCommand(context.Context, gateway.Command) (gateway.Command
 func (s *session) SupportedCommands() []string { return nil }
 
 // reconcileIgnition emits an IGNITION:ON / IGNITION:OFF event when the device's
-// ACC state changes. The first observation only establishes the baseline (no
-// event), so a reconnect — which starts a fresh session — never fires a spurious
-// transition. Only runs once the device is approved.
+// ACC state changes versus its last-known value (tracked per device, across
+// reconnects). The first observation of a device only establishes the baseline, so
+// no spurious event fires on a fresh connect. Only runs once the device is approved.
 func (s *session) reconcileIgnition(acc int) {
-	if s.gate != gateApproved || s.ignition == acc {
+	if s.gate != gateApproved {
 		return
 	}
-	prev := s.ignition
-	s.ignition = acc
-	if prev < 0 {
-		return // baseline established; emit only on subsequent transitions
+	prev, known := observeIgnition(s.serial, acc)
+	if !known || prev == acc {
+		return // baseline established, or no change
 	}
 	event := "IGNITION:OFF"
 	if acc != 0 {

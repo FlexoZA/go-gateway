@@ -184,6 +184,11 @@ func TestUnitSettingsTimezone(t *testing.T) {
 // TestIgnitionEvents confirms an ACC transition in the heartbeat status emits an
 // IGNITION:ON event, while the first (baseline) reading emits nothing.
 func TestIgnitionEvents(t *testing.T) {
+	// Isolate from the package-global per-device ignition tracker.
+	ignitionTracker.mu.Lock()
+	ignitionTracker.m = map[string]int{}
+	ignitionTracker.mu.Unlock()
+
 	received := make(chan map[string]any, 4)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
