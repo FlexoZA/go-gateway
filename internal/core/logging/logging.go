@@ -28,11 +28,14 @@ type Logger struct {
 	// so SetErrorSink installed once (e.g. after the DB connects) takes effect for
 	// loggers that were already derived. nil entry = no sink.
 	errSink *atomic.Pointer[ErrorSink]
+	// ring is the in-memory live-log buffer, shared by reference across all With()
+	// children so every namespace's lines land in one stream the API can tail.
+	ring *ring
 }
 
 // New returns a logger bound to a namespace (e.g. "tcp/howen").
 func New(namespace string) *Logger {
-	l := &Logger{namespace: namespace, debugNS: map[string]bool{}, errSink: &atomic.Pointer[ErrorSink]{}}
+	l := &Logger{namespace: namespace, debugNS: map[string]bool{}, errSink: &atomic.Pointer[ErrorSink]{}, ring: newRing()}
 	raw := strings.TrimSpace(os.Getenv("DEBUG"))
 	switch raw {
 	case "":
@@ -53,7 +56,7 @@ func New(namespace string) *Logger {
 // and sharing the parent's error sink (by reference, so a sink installed later on
 // any related logger is seen here too).
 func (l *Logger) With(namespace string) *Logger {
-	return &Logger{namespace: namespace, debugAll: l.debugAll, debugNS: l.debugNS, errSink: l.errSink}
+	return &Logger{namespace: namespace, debugAll: l.debugAll, debugNS: l.debugNS, errSink: l.errSink, ring: l.ring}
 }
 
 // SetErrorSink installs (or, with nil, clears) the sink that receives every
@@ -83,16 +86,64 @@ func (l *Logger) Error(fields map[string]any) {
 	}
 }
 
-// Debug emits only when debugging is enabled for this namespace.
+// Debug emits to stdout only when debugging is enabled for this namespace, but is
+// still captured into the live-log ring when the ring's capture level allows it —
+// so an operator can watch debug activity from the panel without a stdout restart.
 func (l *Logger) Debug(fields map[string]any) {
-	if l.enabled() {
-		l.emit("debug", fields)
+	stdout := l.enabled()
+	ring := l.ring != nil && l.ring.wants("debug")
+	if !stdout && !ring {
+		return
+	}
+	l.dispatch("debug", fields, stdout)
+}
+
+// SetCaptureLevel sets the live-log ring's capture threshold ("debug" | "info" |
+// "error"); affects this logger and all its With() relatives (shared ring).
+func (l *Logger) SetCaptureLevel(level string) {
+	if l.ring != nil {
+		l.ring.level.Store(int32(levelRank(level)))
 	}
 }
 
-func (l *Logger) emit(level string, fields map[string]any) {
+// CaptureLevel returns the ring's current capture threshold as a string.
+func (l *Logger) CaptureLevel() string {
+	if l.ring == nil {
+		return "info"
+	}
+	switch int(l.ring.level.Load()) {
+	case 0:
+		return "debug"
+	case 2:
+		return "error"
+	default:
+		return "info"
+	}
+}
+
+// LiveSince returns ring entries newer than `after` matching the filters (minLevel
+// "debug"|"info"|"error", unit substring of the namespace, q free-text), plus the
+// latest cursor. Used by the live-log API.
+func (l *Logger) LiveSince(after uint64, minLevel, unit, q string, limit int) ([]Entry, uint64) {
+	if l.ring == nil {
+		return nil, 0
+	}
+	return l.ring.since(after, minLevel, unit, q, limit)
+}
+
+func (l *Logger) emit(level string, fields map[string]any) { l.dispatch(level, fields, true) }
+
+// dispatch writes the line to stdout (when stdout is true) and always offers it to
+// the live-log ring (which decides by capture level).
+func (l *Logger) dispatch(level string, fields map[string]any, stdout bool) {
 	if fields == nil {
 		fields = map[string]any{}
+	}
+	if l.ring != nil {
+		l.ring.push(level, l.namespace, fields)
+	}
+	if !stdout {
+		return
 	}
 	out := map[string]any{"ns": l.namespace, "level": level}
 	for k, v := range fields {

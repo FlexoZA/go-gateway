@@ -262,6 +262,12 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		// Logs.
 		"GET /api/logs":          s.handleGatewayErrors,
 		"GET /api/device-errors": s.handleDeviceErrors,
+
+		// Live activity log: an in-memory tail of the gateway's own log stream
+		// (connects, approvals, GPS forwards, ACKs, errors). Independent of the DB.
+		"GET /api/logs/live":  s.handleLiveLogs,
+		"GET /api/logs/level": s.handleGetLogLevel,
+		"PUT /api/logs/level": s.handleSetLogLevel,
 	}
 	for pattern, h := range protected {
 		mux.Handle(pattern, s.requireAPIKey(h))
@@ -1704,6 +1710,58 @@ func (s *Server) handleDeviceErrors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"errors": rows, "limit": limit, "offset": offset})
+}
+
+// GET /api/logs/live?after=<seq>&level=<info|debug|error>&unit=<>&q=<>&limit=<> —
+// the in-memory tail of the gateway's live log stream. Poll with the returned
+// cursor as the next `after` to follow it. Works without a database.
+func (s *Server) handleLiveLogs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	after, _ := strconv.ParseUint(strings.TrimSpace(q.Get("after")), 10, 64)
+	level := strings.TrimSpace(q.Get("level"))
+	if level == "" {
+		level = "info"
+	}
+	limit := 500
+	if v := strings.TrimSpace(q.Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2000 {
+			limit = n
+		}
+	}
+	entries, cursor := s.log.LiveSince(after, level, q.Get("unit"), q.Get("q"), limit)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries":       entries,
+		"cursor":        cursor,
+		"capture_level": s.log.CaptureLevel(),
+	})
+}
+
+// GET /api/logs/level — the live-log buffer's current capture verbosity.
+func (s *Server) handleGetLogLevel(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"level": s.log.CaptureLevel()})
+}
+
+// PUT /api/logs/level {"level":"debug|info|error"} — set the live-log capture
+// verbosity at runtime (e.g. flip to debug to watch per-frame device activity).
+// Does NOT change stdout/container-log verbosity.
+func (s *Server) handleSetLogLevel(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Level string `json:"level"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	lvl := strings.ToLower(strings.TrimSpace(body.Level))
+	switch lvl {
+	case "debug", "info", "error":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "level must be debug, info, or error"})
+		return
+	}
+	s.log.SetCaptureLevel(lvl)
+	s.log.Info(map[string]any{"event": "live_log_level_changed", "level": lvl})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "level": lvl})
 }
 
 func (s *Server) writeCommandError(w http.ResponseWriter, serial string, err error) {

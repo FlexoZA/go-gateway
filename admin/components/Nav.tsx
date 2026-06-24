@@ -22,6 +22,7 @@ export function Nav() {
     { href: "/users", label: "Users" },
     { href: "/api-keys", label: "API Keys" },
     { href: "/logs", label: "Logs" },
+    { href: "/live-logs", label: "Live Logs" },
   ];
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-edge bg-panel">
