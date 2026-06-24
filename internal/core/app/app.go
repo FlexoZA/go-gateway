@@ -159,6 +159,12 @@ func (a *App) Run() error {
 	}
 
 	srv := gateway.New(a.proto, a.deps)
+	// A unit whose devices speak infrequently can widen the per-connection idle
+	// timeout beyond the framework default.
+	if it, ok := a.proto.(gateway.IdleTimeoutProvider); ok {
+		srv.SetIdleTimeout(it.IdleTimeout())
+		a.log.Info(map[string]any{"event": "idle_timeout_override", "timeout": it.IdleTimeout().String()})
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

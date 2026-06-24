@@ -129,6 +129,15 @@ type MediaServerProvider interface {
 	NewMediaServer(addr string, mgr *media.Manager, clips *media.ClipRegistry, log *logging.Logger) MediaListener
 }
 
+// IdleTimeoutProvider lets a unit override the framework's default per-connection
+// idle timeout (the read deadline). A unit whose devices speak infrequently — e.g.
+// a tracker that only heartbeats every few minutes — implements it so the read
+// loop is not closed between messages. Detected by the app runner via type
+// assertion; units that don't implement it keep the default.
+type IdleTimeoutProvider interface {
+	IdleTimeout() time.Duration
+}
+
 // Frame is one decoded protocol message.
 type Frame struct {
 	Type    int
