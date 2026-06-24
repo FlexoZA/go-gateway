@@ -51,6 +51,7 @@ type DataStore interface {
 	ListDeviceErrors(ctx context.Context, limit, offset int) ([]map[string]any, error)
 
 	ListStandardEventCodes(ctx context.Context) ([]map[string]any, error)
+	AddStandardEventCode(ctx context.Context, code, category, notes string) error
 
 	ListSettings(ctx context.Context) ([]map[string]any, error)
 	SetSetting(ctx context.Context, key, value string) error
@@ -312,7 +313,8 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		"DELETE /api/webhooks/{id}": s.handleDeleteWebhook,
 
 		// Reference data.
-		"GET /api/event-codes": s.handleEventCodes,
+		"GET /api/event-codes":  s.handleEventCodes,
+		"POST /api/event-codes": s.handleAddEventCode,
 
 		// Logs.
 		"GET /api/logs":          s.handleGatewayErrors,
@@ -1753,6 +1755,36 @@ func (s *Server) handleEventCodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"event_codes": rows})
+}
+
+// POST /api/event-codes {"code":"COLLISION:SEVERE","category":"Collision","notes":""}
+// — add (or refresh) a custom event code in the picklist so it's selectable in the
+// mapping editor.
+func (s *Server) handleAddEventCode(w http.ResponseWriter, r *http.Request) {
+	if !s.dataReady(w) {
+		return
+	}
+	var body struct {
+		Code     string `json:"code"`
+		Category string `json:"category"`
+		Notes    string `json:"notes"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	code := strings.TrimSpace(body.Code)
+	if code == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": `"code" is required`})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := s.data.AddStandardEventCode(ctx, code, strings.TrimSpace(body.Category), strings.TrimSpace(body.Notes)); err != nil {
+		s.dataError(w, "add_event_code", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "code": code})
 }
 
 // GET /api/logs — recent gateway/system errors.

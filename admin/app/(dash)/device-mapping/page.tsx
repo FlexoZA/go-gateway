@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PageHeader } from "@/components/ui";
 import { CodeMappingTable } from "@/components/CodeMappingTable";
+import { AddEventCode } from "@/components/AddEventCode";
 import { useUnits } from "@/lib/useGatewayInfo";
 
 export default function DeviceMappingPage() {
@@ -30,6 +31,8 @@ export default function DeviceMappingPage() {
           </select>
         </div>
       )}
+
+      <AddEventCode />
 
       {!unit ? (
         <p className="text-sm text-slate-400">No unit types with editable mappings.</p>

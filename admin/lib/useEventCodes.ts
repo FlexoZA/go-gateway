@@ -13,13 +13,23 @@ let cache: EventCode[] | null = null;
 let inflight: Promise<EventCode[]> | null = null;
 const listeners = new Set<() => void>();
 
-function load(): Promise<EventCode[]> {
+function load(force = false): Promise<EventCode[]> {
+  if (force) {
+    cache = null;
+    inflight = null;
+  }
   inflight ??= api<{ event_codes: EventCode[] }>("event-codes").then((d) => {
     cache = d.event_codes ?? [];
     listeners.forEach((l) => l());
     return cache;
   });
   return inflight;
+}
+
+// refreshEventCodes re-fetches the picklist and notifies every dropdown (call after
+// adding a custom code so it becomes selectable everywhere).
+export function refreshEventCodes() {
+  load(true).catch(() => {});
 }
 
 export function useEventCodes(): EventCode[] {

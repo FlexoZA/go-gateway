@@ -40,6 +40,20 @@ func (s *Store) SeedStandardEventCodes(ctx context.Context, codes []eventcodes.C
 	return nil
 }
 
+// AddStandardEventCode upserts a single (typically custom) event code into the
+// picklist so it becomes selectable in the mapping editor. Re-adding an existing
+// code refreshes its category/notes. Custom codes survive startup re-seeding (the
+// CSV seed only touches its own codes).
+func (s *Store) AddStandardEventCode(ctx context.Context, code, category, notes string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO standard_event_codes (code, category, notes)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (code) DO UPDATE
+		   SET category = EXCLUDED.category, notes = EXCLUDED.notes, updated_at = now()`,
+		code, nullIfEmpty(category), nullIfEmpty(notes))
+	return err
+}
+
 // ListStandardEventCodes returns the picklist, ordered by category then code.
 func (s *Store) ListStandardEventCodes(ctx context.Context) ([]map[string]any, error) {
 	rows, err := s.pool.Query(ctx,

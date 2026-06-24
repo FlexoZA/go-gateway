@@ -1,13 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useEventCodes } from "@/lib/useEventCodes";
 
 // EventCodeSelect is a dropdown of the canonical ACM Standard Event Codes, grouped
-// by category, with a "Custom" button beside it that switches to free text for a
-// code not in the standard list. A non-standard existing value is shown as a
-// "(custom)" option so it still displays and is preserved.
-
+// by category. New codes are added via the "Add event code" section (which persists
+// them to the picklist); a non-standard existing value is shown as a "(custom)"
+// option so it still displays and is preserved.
 export function EventCodeSelect({
   value,
   onChange,
@@ -18,7 +17,6 @@ export function EventCodeSelect({
   className?: string;
 }) {
   const codes = useEventCodes();
-  const [custom, setCustom] = useState(false);
 
   const groups = useMemo(() => {
     const g: Record<string, string[]> = {};
@@ -29,53 +27,19 @@ export function EventCodeSelect({
 
   const known = useMemo(() => new Set(codes.map((c) => c.code)), [codes]);
 
-  // Free-text entry for a custom code. Switching back to the list keeps the value
-  // (a custom value reappears as the "(custom)" option below).
-  if (custom) {
-    return (
-      <div className="flex items-center gap-1">
-        <input
-          className={className}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="e.g. COLLISION:SEVERE"
-          autoFocus
-        />
-        <button
-          type="button"
-          className="btn-ghost px-2 py-1 text-xs"
-          title="Choose from the standard list"
-          onClick={() => setCustom(false)}
-        >
-          List
-        </button>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex items-center gap-1">
-      <select className={className} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">— select event code —</option>
-        {value && !known.has(value) && <option value={value}>{value} (custom)</option>}
-        {groups.map(([cat, list]) => (
-          <optgroup key={cat} label={cat}>
-            {list.map((code) => (
-              <option key={code} value={code}>
-                {code}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-      <button
-        type="button"
-        className="btn-ghost px-2 py-1 text-xs"
-        title="Enter a custom code"
-        onClick={() => setCustom(true)}
-      >
-        Custom
-      </button>
-    </div>
+    <select className={className} value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">— select event code —</option>
+      {value && !known.has(value) && <option value={value}>{value} (custom)</option>}
+      {groups.map(([cat, list]) => (
+        <optgroup key={cat} label={cat}>
+          {list.map((code) => (
+            <option key={code} value={code}>
+              {code}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
   );
 }

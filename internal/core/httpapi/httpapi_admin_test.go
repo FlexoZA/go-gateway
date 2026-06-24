@@ -69,6 +69,7 @@ func (f *fakeData) ListDeviceErrors(context.Context, int, int) ([]map[string]any
 func (f *fakeData) ListStandardEventCodes(context.Context) ([]map[string]any, error) {
 	return []map[string]any{{"code": "PANIC", "category": "Panic"}}, nil
 }
+func (f *fakeData) AddStandardEventCode(context.Context, string, string, string) error { return nil }
 func (f *fakeData) ListSettings(context.Context) ([]map[string]any, error) {
 	return []map[string]any{{"key": "webhook_url", "value": f.webhookURL}}, nil
 }
