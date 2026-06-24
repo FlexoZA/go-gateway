@@ -48,7 +48,7 @@ export default function DeviceMappingPage() {
         subtitle="Map raw device codes to ACM event codes — per unit type, and optionally per device model. Edits apply to the running gateway instantly."
       />
 
-      <div className="mb-6 flex flex-wrap items-end gap-4">
+      <div className="mb-6 flex flex-wrap items-start gap-4">
         {units.length > 1 && (
           <div>
             <label className="text-xs text-slate-400">Unit type</label>
