@@ -216,6 +216,17 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 			})
 			s.conn.Emit(s.serial, deviceMake, deviceModel, "event", buildLocationPayload(s.serial, parsed))
 		}
+	case protoStatus:
+		// Heartbeat: carries no position (nothing to forward), but surfaces the
+		// device's status — useful in the live log. ignition=0 means ACC off, which
+		// is why many GT06 units send no location until they move.
+		if si := parsed.StatusInfo; si != nil {
+			log.Debug(map[string]any{
+				"event": "heartbeat", "serial": s.serial,
+				"ignition": si.Ignition, "voltage_level": si.VoltageLevel,
+				"gsm_signal": si.GSMSignal, "charging": si.Charging,
+			})
+		}
 	default:
 		// Not login/location/heartbeat/alarm — e.g. an extended GT06 location
 		// variant (0x22/0x26/…) this parser doesn't decode yet. Dump the raw frame
