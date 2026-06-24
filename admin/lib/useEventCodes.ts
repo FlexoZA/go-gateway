@@ -1,0 +1,36 @@
+"use client";
+
+// useEventCodes fetches the canonical ACM Standard Event Codes (GET /api/event-codes)
+// once and caches them at module scope, so every event-code dropdown shares a single
+// request instead of refetching per row.
+
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
+
+export type EventCode = { code: string; category: string; notes: string };
+
+let cache: EventCode[] | null = null;
+let inflight: Promise<EventCode[]> | null = null;
+const listeners = new Set<() => void>();
+
+function load(): Promise<EventCode[]> {
+  inflight ??= api<{ event_codes: EventCode[] }>("event-codes").then((d) => {
+    cache = d.event_codes ?? [];
+    listeners.forEach((l) => l());
+    return cache;
+  });
+  return inflight;
+}
+
+export function useEventCodes(): EventCode[] {
+  const [codes, setCodes] = useState<EventCode[]>(cache ?? []);
+  useEffect(() => {
+    const update = () => setCodes(cache ?? []);
+    listeners.add(update);
+    load().then(update).catch(() => {});
+    return () => {
+      listeners.delete(update);
+    };
+  }, []);
+  return codes;
+}

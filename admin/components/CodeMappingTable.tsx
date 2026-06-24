@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { Empty, ErrorBanner, Spinner } from "@/components/ui";
-import { EventCodeDatalist } from "@/components/EventCodeDatalist";
+import { EventCodeSelect } from "@/components/EventCodeSelect";
 
 // CodeMappingTable is the code→event lookup editor: a flat, per-unit table
 // editable inline, applied to the running gateway instantly.
@@ -82,7 +82,6 @@ export function CodeMappingTable({ unit }: { unit: string }) {
 
   return (
     <div>
-      <EventCodeDatalist id="event-codes" />
       <p className="mb-4 text-sm text-slate-400">
         Flat code→event lookups for <span className="font-mono">{unit}</span>. Applies to all models. Edits reach the
         running gateway within milliseconds.
@@ -151,7 +150,7 @@ function MappingRow({
         <BitCell code={m.code} />
       </td>
       <td className="td">
-        <input className="input" list="event-codes" value={eventCode} onChange={(e) => setEventCode(e.target.value)} />
+        <EventCodeSelect value={eventCode} onChange={setEventCode} />
       </td>
       <td className="td">
         <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="—" />
@@ -229,7 +228,7 @@ function AddMapping({
         </div>
         <div className="md:col-span-3">
           <label className="text-xs text-slate-400">Event code</label>
-          <input className="input mt-1" list="event-codes" value={eventCode} onChange={(e) => setEventCode(e.target.value)} placeholder="AI:CELLPHONE" />
+          <EventCodeSelect value={eventCode} onChange={setEventCode} className="input mt-1" />
         </div>
         <div className="md:col-span-3">
           <label className="text-xs text-slate-400">Description</label>
