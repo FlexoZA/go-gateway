@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useFetch } from "@/lib/useFetch";
+import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner, statusTone } from "@/components/ui";
 
 type Unit = {
@@ -15,6 +16,7 @@ type Unit = {
 };
 
 export default function DashboardPage() {
+  const info = useGatewayInfo();
   const units = useFetch<{ units: Unit[] }>("units", 5000);
   const devices = useFetch<{ devices: any[] }>("devices", 10000);
   const pending = useFetch<{ devices: any[] }>("devices/pending", 10000);
@@ -73,9 +75,13 @@ export default function DashboardPage() {
                     <Badge tone="slate">{u.commands?.length ?? 0} cmds</Badge>
                   </td>
                   <td className="td text-right">
-                    <Link href={`/live/${encodeURIComponent(u.serial)}`} className="btn-primary">
-                      Live view
-                    </Link>
+                    {capsForUnit(info, u.protocol)?.has_video !== false ? (
+                      <Link href={`/live/${encodeURIComponent(u.serial)}`} className="btn-primary">
+                        Live view
+                      </Link>
+                    ) : (
+                      <span className="text-slate-500">—</span>
+                    )}
                   </td>
                 </tr>
               ))}

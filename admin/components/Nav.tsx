@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { logout } from "@/lib/api";
-import { useAggregateCaps, useUnits } from "@/lib/useGatewayInfo";
+import { useAggregateCaps } from "@/lib/useGatewayInfo";
 
 export function Nav() {
   const pathname = usePathname();
@@ -11,13 +11,12 @@ export function Nav() {
   // supports the feature (a GPS-only unit has no Clips; a unit without editable
   // mappings has no Device Mapping). Shown until we positively know it's absent.
   const caps = useAggregateCaps();
-  const hasUnitSettings = useUnits().some((u) => (u.schema?.length ?? 0) > 0);
   const links = [
     { href: "/", label: "Dashboard" },
     { href: "/devices", label: "Devices" },
     ...(caps?.has_clips !== false ? [{ href: "/clips", label: "Clips" }] : []),
     ...(caps?.has_mappings !== false ? [{ href: "/device-mapping", label: "Device Mapping" }] : []),
-    ...(hasUnitSettings ? [{ href: "/unit-settings", label: "Unit Settings" }] : []),
+    { href: "/unit-settings", label: "Device Settings" },
     { href: "/server-settings", label: "Server Settings" },
     { href: "/users", label: "Users" },
     { href: "/api-keys", label: "API Keys" },

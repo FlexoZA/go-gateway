@@ -1,14 +1,14 @@
 "use client";
 
-// useGatewayInfo fetches the gateway's hosted unit types and each one's effective
-// capabilities (GET /api/gateway/info) once per session and caches it at module
-// scope. The gateway hosts one OR MORE unit types; this exposes both the per-unit
-// view (capsForUnit) and a union view (useAggregateCaps) the nav uses to show a
-// link when ANY unit supports the feature.
+// useGatewayInfo fetches the gateway's hosted unit types and each one's
+// capabilities (GET /api/gateway/info) and caches it at module scope. Each unit
+// reports `capabilities` (EFFECTIVE — what's on now, after operator disable-toggles)
+// which drives UI gating, and `supported` (what the unit's protocol can do) which
+// drives which toggles to show. refreshGatewayInfo() re-fetches and notifies every
+// mounted consumer, so toggling a capability updates the whole admin live.
 //
 // Gate UI with `caps?.has_x !== false`: while loading (undefined) the feature stays
-// shown, and only disappears once we positively learn it's absent — avoiding a
-// flash of missing nav and degrading gracefully if the call ever fails.
+// shown, and only disappears once we positively learn it's absent.
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
@@ -33,7 +33,7 @@ export type SettingField = {
   group?: string;
 };
 
-export type Unit = { unit: string; capabilities: Caps; schema?: SettingField[] };
+export type Unit = { unit: string; capabilities: Caps; supported?: Caps; schema?: SettingField[] };
 
 // GatewayInfo is the /api/gateway/info response: a units[] array plus back-compat
 // scalar `unit`/`capabilities` (the first unit) for older single-unit panels.
@@ -41,13 +41,36 @@ export type GatewayInfo = { unit?: string; capabilities?: Caps; units?: Unit[] }
 
 let cache: GatewayInfo | null = null;
 let inflight: Promise<GatewayInfo> | null = null;
+const listeners = new Set<() => void>();
+
+function load(force = false): Promise<GatewayInfo> {
+  if (force) {
+    cache = null;
+    inflight = null;
+  }
+  inflight ??= api<GatewayInfo>("gateway/info").then((d) => {
+    cache = d;
+    listeners.forEach((l) => l());
+    return d;
+  });
+  return inflight;
+}
+
+// refreshGatewayInfo re-fetches gateway info and notifies all consumers (call after
+// changing a capability toggle so the UI reflects it immediately).
+export function refreshGatewayInfo() {
+  load(true).catch(() => {});
+}
 
 export function useGatewayInfo(): GatewayInfo | null {
   const [info, setInfo] = useState<GatewayInfo | null>(cache);
   useEffect(() => {
-    if (cache) return;
-    inflight ??= api<GatewayInfo>("gateway/info").then((d) => (cache = d));
-    inflight.then(setInfo).catch(() => {});
+    const update = () => setInfo(cache);
+    listeners.add(update);
+    load().then(update).catch(() => {});
+    return () => {
+      listeners.delete(update);
+    };
   }, []);
   return info;
 }
@@ -66,16 +89,15 @@ export function useUnits(): Unit[] {
   return normalizeUnits(useGatewayInfo());
 }
 
-// capsForUnit returns a specific unit type's capabilities (undefined until loaded
+// capsForUnit returns a unit type's EFFECTIVE capabilities (undefined until loaded
 // or for an unknown unit).
 export function capsForUnit(info: GatewayInfo | null, unit?: string): Caps | undefined {
   if (!unit) return undefined;
   return normalizeUnits(info).find((u) => u.unit === unit)?.capabilities;
 }
 
-// useAggregateCaps unions capabilities across all hosted units: has_x is true if
-// ANY unit offers it. Used by the nav so a feature link shows when at least one
-// unit supports it. Undefined until loaded.
+// useAggregateCaps unions effective capabilities across all hosted units: has_x is
+// true if ANY unit offers it. Used by the nav. Undefined until loaded.
 export function useAggregateCaps(): Caps | undefined {
   const units = useUnits();
   if (units.length === 0) return undefined;

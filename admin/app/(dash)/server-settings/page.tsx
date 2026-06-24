@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
-import { useUnits } from "@/lib/useGatewayInfo";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 
 type Webhook = { id: number; name: string; url: string; is_enabled: boolean; updated_at: string };
@@ -14,7 +13,6 @@ export default function ServerSettingsPage() {
   const settings = useFetch<{ settings: Setting[] }>("settings");
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const units = useUnits();
   const webhooks = data?.webhooks ?? [];
   const enabledCount = webhooks.filter((w) => w.is_enabled).length;
 
@@ -57,9 +55,6 @@ export default function ServerSettingsPage() {
 
       <div className="mb-8 max-w-3xl space-y-4">
         <GatewayNameCard current={settingVal("gateway_name")} onSaved={settings.refresh} />
-        {units.map((u) => (
-          <UnitPortsCard key={u.unit} unit={u.unit} hasVideo={!!u.capabilities?.has_video} />
-        ))}
         <DeviceAuthCard current={settingVal("device_reject_unknown")} onSaved={settings.refresh} />
       </div>
 
@@ -261,125 +256,6 @@ function GatewayNameCard({ current, onSaved }: { current: string; onSaved: () =>
       {!current && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           No gateway name set — the <span className="font-mono">gateway</span> field will be null in outgoing messages.
-        </div>
-      )}
-    </div>
-  );
-}
-
-type Ports = {
-  unit: string;
-  has_video: boolean;
-  device_port: string;
-  device_port_active: string;
-  media_port?: string;
-  media_port_active?: string;
-};
-
-const isPort = (v: string) => /^\d+$/.test(v.trim()) && +v >= 1 && +v <= 65535;
-
-// UnitPortsCard edits one unit type's listener ports — the device TCP port every
-// unit has, plus the media (video) port for video-capable units. Ports apply on
-// the next gateway restart (and, in Docker, the published port mapping must match).
-function UnitPortsCard({ unit, hasVideo }: { unit: string; hasVideo: boolean }) {
-  const { data, error, refresh } = useFetch<Ports>(`unit-types/${encodeURIComponent(unit)}/ports`);
-  const [device, setDevice] = useState("");
-  const [media, setMedia] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (data) {
-      setDevice(data.device_port || "");
-      setMedia(data.media_port || "");
-    }
-  }, [data]);
-
-  const devDirty = device !== (data?.device_port || "");
-  const medDirty = hasVideo && media !== (data?.media_port || "");
-  const dirty = devDirty || medDirty;
-  const valid = (!devDirty || isPort(device)) && (!medDirty || isPort(media));
-  const devRestart = data?.device_port_active && data?.device_port && data.device_port_active !== data.device_port;
-  const medRestart = hasVideo && data?.media_port_active && data?.media_port && data.media_port_active !== data.media_port;
-
-  async function save() {
-    setBusy(true);
-    setErr(null);
-    try {
-      const body: any = {};
-      if (devDirty) body.device_port = +device;
-      if (medDirty) body.media_port = +media;
-      await api(`unit-types/${encodeURIComponent(unit)}/ports`, { method: "PUT", body: JSON.stringify(body) });
-      await refresh();
-    } catch (e: any) {
-      setErr(e.message || "Save failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="card space-y-3">
-      <div>
-        <h2 className="text-sm font-semibold text-white">
-          <span className="font-mono">{unit}</span> ports
-        </h2>
-        <p className="mt-1 text-sm text-slate-400">
-          The TCP port <span className="font-mono">{unit}</span> devices connect to{hasVideo ? ", plus the media (video) port" : ""}.
-          Listening on <span className="font-mono text-slate-200">{data?.device_port_active || "—"}</span>
-          {hasVideo ? (
-            <>
-              {" · media "}
-              <span className="font-mono text-slate-200">{data?.media_port_active || "—"}</span>
-            </>
-          ) : null}
-          .
-        </p>
-      </div>
-
-      {(err || error) && (
-        <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{err || error}</div>
-      )}
-
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="w-40">
-          <label className="text-xs text-slate-400">Device port</label>
-          <input className="input mt-1" inputMode="numeric" value={device} onChange={(e) => setDevice(e.target.value)} placeholder="33000" />
-        </div>
-        {hasVideo && (
-          <div className="w-40">
-            <label className="text-xs text-slate-400">Media port (video)</label>
-            <input className="input mt-1" inputMode="numeric" value={media} onChange={(e) => setMedia(e.target.value)} placeholder="33001" />
-          </div>
-        )}
-        <button className="btn-primary" onClick={save} disabled={!dirty || busy || !valid}>
-          {busy ? "Saving…" : "Save"}
-        </button>
-      </div>
-
-      <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-        ⚠ Port changes take effect only after a gateway <strong>restart</strong> — a TCP listener cannot move while running. In Docker you
-        must also update the published port in <span className="font-mono">docker-compose.yml</span> (the{" "}
-        <span className="font-mono">ports:</span> mapping) and recreate the container, or devices can&apos;t connect.
-      </div>
-
-      {(devRestart || medRestart) && (
-        <div className="rounded-md border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 text-xs text-indigo-200">
-          Restart pending —{" "}
-          {devRestart && (
-            <>
-              device: configured <span className="font-mono">{data?.device_port}</span>, running{" "}
-              <span className="font-mono">{data?.device_port_active}</span>
-            </>
-          )}
-          {devRestart && medRestart ? "; " : ""}
-          {medRestart && (
-            <>
-              media: configured <span className="font-mono">{data?.media_port}</span>, running{" "}
-              <span className="font-mono">{data?.media_port_active}</span>
-            </>
-          )}
-          .
         </div>
       )}
     </div>

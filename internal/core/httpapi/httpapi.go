@@ -105,6 +105,56 @@ func DevicePortActiveKey(unit string) string { return "device_port_active:" + un
 func MediaPortKey(unit string) string        { return "media_port:" + unit }
 func MediaPortActiveKey(unit string) string  { return "media_port_active:" + unit }
 
+// capKey is the server_settings key for a unit's per-capability enable toggle.
+// Absent = enabled; "false" = the operator disabled a supported feature. A
+// capability the unit doesn't support can never be enabled.
+func capKey(feature, unit string) string { return "cap_" + feature + ":" + unit }
+
+// reportedCaps gates a unit's SUPPORTED capabilities (declared by its protocol AND
+// enabled by runtime config) by the operator's disable-toggles, yielding what the
+// admin should actually show. Clips follow video; mappings are not toggleable.
+func reportedCaps(sup gateway.EffectiveCapabilities, unit string, toggles map[string]string) gateway.EffectiveCapabilities {
+	on := func(feature string, supported bool) bool {
+		if !supported {
+			return false
+		}
+		if v, ok := toggles[capKey(feature, unit)]; ok && v == "false" {
+			return false
+		}
+		return true
+	}
+	video := on("video", sup.HasVideo)
+	return gateway.EffectiveCapabilities{
+		HasVideo:    video,
+		HasCommands: on("commands", sup.HasCommands),
+		HasConfig:   on("config", sup.HasConfig),
+		HasStatus:   on("status", sup.HasStatus),
+		HasClips:    sup.HasClips && video,
+		HasMappings: sup.HasMappings,
+	}
+}
+
+// loadCapToggles reads the per-unit capability disable-toggles from settings.
+// Returns an empty map when there's no database.
+func (s *Server) loadCapToggles(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	if s.data == nil {
+		return out
+	}
+	rows, err := s.data.ListSettings(ctx)
+	if err != nil {
+		return out
+	}
+	for _, row := range rows {
+		k, _ := row["key"].(string)
+		if strings.HasPrefix(k, "cap_") {
+			v, _ := row["value"].(string)
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // UnitInfo describes one hosted unit type for the admin panel: its name, the
 // effective capabilities it offers right now, and (optionally) its editable
 // settings schema. The gateway hosts one or more of these.
@@ -264,6 +314,10 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		"GET /api/unit-types/{unit}/ports": s.handleGetPorts,
 		"PUT /api/unit-types/{unit}/ports": s.handleSetPorts,
 
+		// Per-unit capability disable-toggles (turn off a supported feature so the
+		// admin hides it). Applies live; can't enable an unsupported feature.
+		"PUT /api/unit-types/{unit}/capabilities": s.handleSetCapabilities,
+
 		// Telemetry webhooks (the GPS/event data sinks).
 		"GET /api/webhooks":         s.handleListWebhooks,
 		"POST /api/webhooks":        s.handleCreateWebhook,
@@ -322,11 +376,24 @@ func (s *Server) handlePing(w http.ResponseWriter, _ *http.Request) {
 // capabilities (declared by the unit AND enabled by config). The admin panel reads
 // it once to render per-unit UI and hide features this build/config doesn't offer.
 // `unit`/`capabilities` echo the first unit for backward compatibility.
-func (s *Server) handleGatewayInfo(w http.ResponseWriter, _ *http.Request) {
-	resp := map[string]any{"units": s.units}
+func (s *Server) handleGatewayInfo(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	toggles := s.loadCapToggles(ctx)
+
+	units := make([]map[string]any, 0, len(s.units))
+	for _, u := range s.units {
+		units = append(units, map[string]any{
+			"unit":         u.Name,
+			"capabilities": reportedCaps(u.Caps, u.Name, toggles), // effective (drives UI)
+			"supported":    u.Caps,                                // what the unit can do (which toggles to show)
+			"schema":       u.Schema,
+		})
+	}
+	resp := map[string]any{"units": units}
 	if len(s.units) > 0 {
 		resp["unit"] = s.units[0].Name
-		resp["capabilities"] = s.units[0].Caps
+		resp["capabilities"] = reportedCaps(s.units[0].Caps, s.units[0].Name, toggles)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1606,6 +1673,57 @@ func (s *Server) handleSetPorts(w http.ResponseWriter, r *http.Request) {
 }
 
 func validPort(p int) bool { return p >= 1 && p <= 65535 }
+
+// PUT /api/unit-types/{unit}/capabilities {"video":false,"config":true,...} — set
+// a unit's capability disable-toggles. Only features the unit SUPPORTS may be
+// enabled; enabling an unsupported feature is rejected. Applies live (the admin
+// re-reads /api/gateway/info).
+func (s *Server) handleSetCapabilities(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.unitInfo(r.PathValue("unit"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown unit"})
+		return
+	}
+	if !s.dataReady(w) {
+		return
+	}
+	var body struct {
+		Video    *bool `json:"video"`
+		Commands *bool `json:"commands"`
+		Config   *bool `json:"config"`
+		Status   *bool `json:"status"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	fields := []struct {
+		feature   string
+		val       *bool
+		supported bool
+	}{
+		{"video", body.Video, u.Caps.HasVideo},
+		{"commands", body.Commands, u.Caps.HasCommands},
+		{"config", body.Config, u.Caps.HasConfig},
+		{"status", body.Status, u.Caps.HasStatus},
+	}
+	for _, f := range fields {
+		if f.val == nil {
+			continue
+		}
+		if *f.val && !f.supported {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": u.Name + " does not support " + f.feature})
+			return
+		}
+		if err := s.data.SetSetting(ctx, capKey(f.feature, u.Name), strconv.FormatBool(*f.val)); err != nil {
+			s.dataError(w, "set_capability", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "unit": u.Name})
+}
 
 // unitSettingField finds a schema field by key.
 func unitSettingField(schema []gateway.SettingField, key string) (gateway.SettingField, bool) {
