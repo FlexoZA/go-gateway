@@ -223,17 +223,28 @@ func decodeStatusInfo(content []byte, off int) *statusInfo {
 // byte → event-code table.
 const mapTypeAlarm = "alarm_former"
 
-// alarmEventCodes is the BUILT-IN DEFAULT alarm/language former byte → ACM-style
-// event code map. These are provisional and should be confirmed against the ACM
-// Standard Event Code table once a real device alarm sample is available. At
-// runtime they can be overridden from the database (ApplyMappings) so a front end
-// can edit them without a redeploy; the defaults remain the fallback.
+// alarmEventCodes is the BUILT-IN DEFAULT alarm-byte → ACM Standard Event Code map
+// for the GT06 standard alarm table (the values carried in the status/alarm byte of
+// 0x16/0x22/0x13 packets). The model on the label (G30S) is a generic GT06 vehicle
+// tracker — NOT a Concox VL/LW/SW model — so the standard (non-model-specific) table
+// applies. Values map to codes that exist in the ACM picklist. These remain
+// provisional until confirmed against a real alarm from the device, and at runtime
+// they can be overridden from the database (ApplyMappings) without a redeploy.
+//
+// The 0x80+ "extended" alarm values (vibration/overspeed/harsh-driving/accident in a
+// dedicated 0x95 packet) are a SEPARATE code space and decode path — not mapped here.
 var alarmEventCodes = map[int]string{
-	0x01: "PANIC",           // SOS
-	0x02: "POWER:CUT",       // power cut
-	0x03: "ALARM:VIBRATION", // shock
-	0x04: "GEOFENCE:ENTER",  // fence in
-	0x05: "GEOFENCE:EXIT",   // fence out
+	0x01: "PANIC",                // SOS
+	0x02: "BATTERY:DISCONNECTED", // power / main supply cut
+	0x03: "ALARM:VIBRATION",      // vibration / shock
+	0x04: "ZONE:ENTER",           // geofence enter
+	0x05: "ZONE:EXIT",            // geofence exit
+	0x06: "SPEEDING",             // overspeed
+	0x09: "TOWING:START",         // movement / displacement (parked vehicle moved)
+	0x0e: "BATTERY:LOW",          // low battery
+	0x0f: "BATTERY:LOW",          // low battery (protection)
+	0x13: "ALARM:TAMPERING",      // disassemble / tamper
+	0x14: "ALARM:DOOR_OPEN",      // door
 }
 
 // currentAlarmCodes is the active set, swapped atomically by ApplyMappings.
