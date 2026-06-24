@@ -181,6 +181,7 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		if err := s.conn.WriteFrame(buildResponse(parsed.Protocol, parsed.SerialNo)); err != nil {
 			return err
 		}
+		log.Debug(map[string]any{"event": "ack_sent", "serial": s.serialOrUnknown(), "protocol": parsed.Protocol, "serial_no": parsed.SerialNo})
 	}
 
 	if s.serial == "" {
@@ -195,10 +196,19 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		return s.handleLogin(ctx)
 	case protoLocation:
 		if s.gate == gateApproved && parsed.GPS != nil {
+			log.Debug(map[string]any{
+				"event": "gps_forward", "serial": s.serial,
+				"lat": parsed.GPS.Latitude, "lon": parsed.GPS.Longitude,
+				"speed": parsed.GPS.Speed, "sats": parsed.GPS.Satellites, "positioning": parsed.GPS.Positioning,
+			})
 			s.conn.Emit(s.serial, deviceMake, deviceModel, "gps", buildLocationPayload(s.serial, parsed))
 		}
 	case protoAlarm:
 		if s.gate == gateApproved && parsed.GPS != nil {
+			log.Debug(map[string]any{
+				"event": "event_forward", "serial": s.serial,
+				"lat": parsed.GPS.Latitude, "lon": parsed.GPS.Longitude, "events": parsed.Events,
+			})
 			s.conn.Emit(s.serial, deviceMake, deviceModel, "event", buildLocationPayload(s.serial, parsed))
 		}
 	}
