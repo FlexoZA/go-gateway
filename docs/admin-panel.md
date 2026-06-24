@@ -1,7 +1,8 @@
 # Admin panel
 
 A Next.js + Tailwind web app (`admin/`) for operating the gateway: approve
-connecting devices, edit server settings (event mappings), and view logs. It
+connecting devices, view live device status, configure units, stream live video
+and pull recorded clips, edit server settings (event mappings), and view logs. It
 runs as its own Docker container.
 
 ## Security model
@@ -43,8 +44,10 @@ initialized it returns `409` and the panel routes to normal login.
 
 | Page | Path | Gateway endpoints used |
 |------|------|------------------------|
-| Dashboard | `/` | `GET /api/units`, `GET /api/devices`, `GET /api/devices/pending` |
+| Dashboard | `/` | `GET /api/units`, `GET /api/devices`, `GET /api/devices/pending` — live/standby/offline counts (a unit's `state` can be `online`/`sleep`/`offline`; the dashboard surfaces an **In standby** count and a per-device State badge, and serials link to the device detail page) |
 | Devices | `/devices` | `GET /api/devices`, `GET /api/devices/pending`, `POST …/approve`, `POST …/reject`, `DELETE /api/devices/{serial}` |
+| Device detail | `/devices/{serial}` | **Status tab:** `GET /api/units/{serial}/status` (live 4G/network, module health, storage, IO, GPS). **Config tab:** `GET/PUT /api/units/{serial}/config` (full device-settings editor, below). `POST …/commands` `wake_device` when the unit is in standby |
+| Clips | `/clips` | `GET /api/units/{serial}/recordings` (search footage), `POST /api/units/{serial}/clips` (pull a clip or trimmed section), `GET /api/clips`, `GET /api/clips/{id}`, `/download`, `DELETE /api/clips/{id}`. Live preview uses `POST /api/units/{serial}/stream/start`+`stop` and the `/api/hls/` playlist |
 | Device Mapping | `/device-mapping` | **Code table:** `GET/PUT/DELETE /api/mappings` (+ `GET /api/event-codes` picklist). **Visual workflows:** `GET/PUT/DELETE /api/workflows[/{model}]`, `POST /api/workflows/test` |
 | Server Settings | `/server-settings` | **Gateway identity / device port / device authorization:** `GET/PUT /api/settings` (`gateway_name` & `device_reject_unknown` live, `device_port` restart-applied). **Webhooks:** `GET/POST /api/webhooks`, `PUT/DELETE /api/webhooks/{id}` (GPS/event sinks; multiple, each enable/disable) |
 | Users | `/users` | `GET/POST /api/users`, `PUT/DELETE /api/users/{id}` (create accounts, enable/disable, reset password, delete) |
@@ -69,6 +72,24 @@ event codes:
   canvas has a live **Test run** panel that dry-runs the graph against a sample
   payload before saving. See [http-api.md](http-api.md#per-model-mapping-workflows)
   for the graph/node schema.
+
+### Device detail & config editor
+
+Clicking a device opens its detail page with two tabs:
+
+- **Status** — a live read-out of the unit (`GET …/status`): connection/server,
+  mobile network/4G signal, module health, SD storage, vehicle IO, GPS/location.
+- **Config** — a full settings editor (`GET/PUT …/config`) grouped into the
+  device's own menu categories (Network, Time, Power, Recording, Alarms, PTZ,
+  System). Common segments (Wi-Fi, mobile, server, clock, power, …) get curated
+  friendly labels and controls; the technical long-tail renders generically from
+  the device's own field names. **Save writes only the fields you changed** — the
+  firmware returns garbage in untouched string fields, so the editor deep-diffs
+  and sends just the changed leaves (never a read-modify-write). Risky segments
+  (Server, Power) confirm before saving; firmware/identity fields are read-only.
+  The UI metadata lives in `admin/lib/howenConfig.ts`; add labels/enums there
+  without touching the gateway. The unit must be **awake** to read/write — a
+  standby device shows a **Wake** button.
 
 ## Configuration
 

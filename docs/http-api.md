@@ -69,6 +69,23 @@ One connected device. Returns the same object as a `units[]` element, or:
 404 { "error": "unit not connected" }
 ```
 
+### `GET /api/units/{serial}/status`
+The connected device's live status detail — connection/server, mobile network/4G,
+module health, storage, vehicle IO, GPS/location, sensors. Backs the device detail
+page. `404` if the unit is not connected.
+
+```json
+200 {
+  "serial": "87845313",
+  "connection": { "serial": "...", "protocol": "howen", "model": "...",
+                  "state": "online", "remote_addr": "...", "connected_at": "..." },
+  "telemetry": { "network": { }, "modules": { }, "storage": [ ],
+                 "location": { }, "vehicle": { }, "sensors": { } }
+}
+```
+
+`telemetry` is `null` until the device has reported a status frame.
+
 ### `POST /api/units/{serial}/commands`
 Send a control command to a connected device. The gateway forwards it over the
 device's live TCP connection and waits for the device's acknowledgement.
@@ -96,6 +113,119 @@ Errors:
 | `404` | Unit not connected |
 | `502` | Device rejected the command (non-zero `err`) |
 | `504` | Device did not answer in time |
+
+## Device configuration
+
+Read and write the unit's own parameter settings (Wi-Fi, mobile data, server,
+clock, power, recording, alarms, …) over the H-Protocol param-config channel
+(`0x40A0`/`0x10A0`). The unit must be **awake** — a device in standby returns
+`409 { "code": "device_sleeping" }`; send the `wake_device` command first.
+
+### `GET /api/units/{serial}/config?modules=WIFI,DIALUP,SERVER`
+Read one or more config segments. `modules` is a comma-separated list of segment
+names; omitted, it defaults to `VERSIONINFO,JTBASE,WIFI,DIALUP,SERVER`. Segments
+the device doesn't have are silently omitted from the reply. Values are all
+strings, often deeply nested (per-channel `chn0..15`, per-day `week0..6`, etc.).
+
+```json
+200 { "sc": { "WIFI": { "isOpen": "1", "SSID": "Lab", "Pwd": "…", "Dhcp": "1" } } }
+```
+
+### `PUT /api/units/{serial}/config`
+Write changed fields, then re-read the written segments and return the device's
+truth. **Send ONLY the fields being changed** — the firmware returns garbage in
+some untouched string fields, so a full read-modify-write would corrupt config.
+
+```json
+// request — nested sc with only the changed leaves
+{ "sc": { "WIFI": { "SSID": "newssid" } } }
+// 200 — re-read of the written segment(s)
+{ "ok": true, "sc": { "WIFI": { "SSID": "newssid", "isOpen": "1", "…": "…" } } }
+// 400 — empty/malformed body
+{ "error": "body must be {\"sc\": {SEGMENT: {field: value}}}" }
+```
+
+Both routes use a 25s device timeout; common segment names (curated friendly in
+the panel) include `WIFI DIALUP SERVER ROAMING CLOCK DST POWER RECORD DISPLAY OSD
+MASK Privacy IOSET SPEED GSENSOR MOTIONDETECT ACC VOLTAGE PTZ LANGUAGE JTBASE
+UPGRADE VERSIONINFO`.
+
+## Video, recordings & clips
+
+Live video is HLS produced by ffmpeg; clips are `.mp4` files pulled from the
+device's SD card and stored server-side under `CLIPS_ROOT` (the "bucket"). All
+video routes require the gateway to have video enabled (`MEDIA_ADVERTISE_HOST`
+set) — otherwise they return `503 { "error": "… not enabled" }`. A unit in
+standby returns `409 device_sleeping`.
+
+### `POST /api/units/{serial}/stream/start`
+Begin a live stream. ffmpeg writes the HLS playlist a few seconds after the device
+starts sending frames; the handler waits for the first segment so the player never
+races a missing manifest. `ready:false` just means the playlist wasn't up within
+the window — the player can keep retrying.
+
+```json
+// request — camera 0-based; profile 0 = main (high), 1 = sub (low)
+{ "camera": 0, "profile": 0 }
+// 200
+{ "ok": true, "session_id": "…", "hls_path": "87845313/0/0/stream.m3u8", "ready": true }
+```
+
+### `POST /api/units/{serial}/stream/stop`
+Stop a live stream. Same `{ "camera", "profile" }` body. `200 { "ok": true }`.
+
+### `GET /api/hls/<serial>/<camera>/<profile>/(stream.m3u8|seg_NNN.ts)`
+Serve the HLS playlist/segments ffmpeg produced. API-key protected like everything
+else (the panel proxies these so the browser player stays authenticated). `404`
+when video is not enabled.
+
+### `GET /api/units/{serial}/recordings?camera=&profile=&start_utc=&end_utc=`
+Ask the device what footage it holds for a window — **query this before requesting
+a clip**, because playback is file-based and only matches existing recordings.
+Defaults: `camera=-1` (all), `profile=1`, window = last 24h. `start_utc`/`end_utc`
+are Unix seconds (true UTC; the gateway localises to the device clock internally).
+
+```json
+200 { "recordings": [
+  { "camera": 0, "profile": 0, "start_utc": 1750000000, "end_utc": 1750000300,
+    "file_name": "…", "size": 31457280, "device_start": "…", "device_end": "…" } ],
+  "count": 1 }
+```
+
+### `POST /api/units/{serial}/clips`
+Request a clip upload. The `.mp4` arrives asynchronously; the response carries the
+`clip_id` to poll via `GET /api/clips/{id}`. Times are true-UTC Unix seconds.
+
+```json
+// request
+{ "camera": 0, "profile": 0, "start_utc": 1750000000, "end_utc": 1750000020, "audio": false }
+// 200
+{ "ok": true, "clip_id": 11, "session_id": "…", "status": "requested" }
+```
+
+### `GET /api/clips?serial=&limit=&offset=`
+List recorded clips, newest first (paginated). `serial` filters to one device.
+
+```json
+200 { "clips": [
+  { "id": 11, "serial": "87845313", "camera": 0, "profile": 0,
+    "start_utc": 1750000000, "end_utc": 1750000020, "duration_secs": 20,
+    "status": "ready", "file_size": 16800000, "bytes_received": 16800000,
+    "storage_path": "87845313/11.mp4", "error": "",
+    "created_at": "…", "updated_at": "…" } ] }
+```
+
+`status`: `requested` → `receiving` → `ready` | `error`.
+
+### `GET /api/clips/{id}`
+One clip's metadata/status (same object shape as a `clips[]` element). `404` if absent.
+
+### `GET /api/clips/{id}/download`
+Stream the stored `.mp4` (`Content-Type: video/mp4`, attachment). `409` if the
+clip isn't `ready`; `404` if the file is missing or storage isn't configured.
+
+### `DELETE /api/clips/{id}`
+Remove the clip record and its file. `200 { "ok": true }` / `404` if absent.
 
 ## Admin endpoints
 
@@ -394,8 +524,10 @@ editor's test panel.
 The per-device list is also returned in each unit's `commands` field, so a front
 end can render exactly what a given device accepts.
 
-Video/stream/clip and parameter-config (read/write device settings) commands are
-not part of this set yet — they arrive with the media milestone.
+Live video, recorded clips, and read/write device configuration are **not** part
+of this command catalog — they have their own dedicated routes (see
+[Device configuration](#device-configuration) and
+[Video, recordings & clips](#video-recordings--clips) above).
 
 ## Example
 

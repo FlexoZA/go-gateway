@@ -93,6 +93,23 @@ id PK, name, url UNIQUE, is_enabled, created_at, updated_at
 Served at `GET /api/webhooks`; managed via `POST /api/webhooks`,
 `PUT/DELETE /api/webhooks/{id}` (URLs validated as http(s)).
 
+### `clips` — recorded-clip metadata
+Metadata for `.mp4` files pulled from a device's SD card (H-Protocol playback,
+`0x4070`). This is **metadata only** — the bytes live on disk under `CLIPS_ROOT`
+(the "bucket"); `storage_path` is relative to that root. `status` advances
+`requested` → `receiving` → `ready` | `error` as the upload streams in.
+
+```
+id PK, serial, camera, profile, start_utc, end_utc, duration_secs,
+status, file_size, bytes_received, storage_path, error, created_at, updated_at
+INDEX (serial, created_at DESC)
+```
+
+`start_utc`/`end_utc` are true-UTC Unix seconds (the gateway localises to the
+device clock when requesting playback — see `DEVICE_TZ_OFFSET`). Served at
+`GET /api/clips`; one clip at `GET /api/clips/{id}`, downloaded via
+`/download`, removed (record + file) via `DELETE /api/clips/{id}`.
+
 ### `server_settings` — editable gateway settings
 Generic key/value store for runtime-editable, gateway-wide settings, with a
 `NOTIFY server_settings_changed` trigger. Keys: `gateway_name` (the identifier in

@@ -289,6 +289,8 @@ message golden parity test (`internal/core/message`).
 - **Control API (done):** API-key-protected HTTP endpoints to list connected
   units and send Howen control commands (`Capabilities.HasCommands`), plus user
   accounts and editable event mappings.
-- **Milestone 2:** Howen video/media — live HLS via ffmpeg, clip ingest, object
-  storage — behind `Capabilities.HasVideo`.
+- **Milestone 2 (done):** Howen video/media behind `Capabilities.HasVideo` —
+  live HLS via ffmpeg, recorded-clip ingest to server-side storage (`CLIPS_ROOT`),
+  footage/recordings query, live device status, and full device configuration
+  (read/write all parameter segments) from the admin panel.
 - **Milestone 3:** additional GPS-only unit types via the scaffold.
