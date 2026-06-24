@@ -181,6 +181,72 @@ func TestUnitSettingsTimezone(t *testing.T) {
 	}
 }
 
+// TestIgnitionEvents confirms an ACC transition in the heartbeat status emits an
+// IGNITION:ON event, while the first (baseline) reading emits nothing.
+func TestIgnitionEvents(t *testing.T) {
+	received := make(chan map[string]any, 4)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var msg map[string]any
+		_ = json.Unmarshal(body, &msg)
+		received <- msg
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	deps := gateway.Deps{
+		Config:  config.Config{ListenPort: 8050},
+		Log:     logging.New("test"),
+		Builder: message.NewBuilder("test-gw", 0),
+		Sinks:   []gateway.Sink{webhook.New(ts.URL)},
+		Auth:    device.AllowAll{},
+		Hub:     gateway.NewHub(),
+	}
+	srv := gateway.New(New(), deps)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Serve(ctx, ln)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	conn.Write(hexBytes(t, "78 78 0D 01 01 23 45 67 89 01 23 45 00 01 8C DD 0D 0A"))
+	ack := make([]byte, 10)
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	io.ReadFull(conn, ack)
+
+	// Baseline heartbeat: ACC off (terminalInfo bit1=0) → establishes state, no event.
+	conn.Write(buildFrame(protoStatus, []byte{0x00, 0x06, 0x04, 0x00, 0x01}, 0x0001))
+	// Transition heartbeat: ACC on (terminalInfo bit1=1) → IGNITION:ON.
+	conn.Write(buildFrame(protoStatus, []byte{0x02, 0x06, 0x04, 0x00, 0x01}, 0x0002))
+
+	select {
+	case msg := <-received:
+		events, _ := msg["events"].([]any)
+		if len(events) == 0 {
+			t.Fatalf("expected an ignition event, got none: %v", msg["events"])
+		}
+		first, _ := events[0].([]any)
+		if len(first) == 0 || first[0] != "IGNITION:ON" {
+			t.Fatalf("event = %v, want IGNITION:ON", events)
+		}
+		dev, _ := msg["device"].(map[string]any)
+		if dev["serial_no"] != "123456789012345" {
+			t.Fatalf("serial_no = %v", dev["serial_no"])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for ignition event")
+	}
+}
+
 // TestHeartbeatAcked confirms the gateway answers a heartbeat so the device keeps
 // the connection alive.
 func TestHeartbeatAcked(t *testing.T) {

@@ -132,7 +132,7 @@ func syncToStart(r *bufio.Reader) error {
 }
 
 func (*Protocol) NewSession(c *gateway.Conn) gateway.Session {
-	return &session{conn: c}
+	return &session{conn: c, ignition: -1}
 }
 
 type gateStatus int
@@ -147,6 +147,9 @@ type session struct {
 	conn   *gateway.Conn
 	serial string // the device IMEI, established by the login packet
 	gate   gateStatus
+	// ignition is the last-known ACC state (-1 unknown, 0 off, 1 on), used to emit
+	// IGNITION:ON/OFF events only on a transition.
+	ignition int
 }
 
 // OnFrame parses a frame, ACKs it when the protocol requires, and forwards
@@ -216,16 +219,22 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 			})
 			s.conn.Emit(s.serial, deviceMake, deviceModel, "event", buildLocationPayload(s.serial, parsed))
 		}
+		if si := parsed.StatusInfo; si != nil {
+			s.reconcileIgnition(si.Ignition)
+		}
 	case protoStatus:
 		// Heartbeat: carries no position (nothing to forward), but surfaces the
 		// device's status — useful in the live log. ignition=0 means ACC off, which
-		// is why many GT06 units send no location until they move.
+		// is why many GT06 units send no location until they move. The device fires
+		// a heartbeat immediately on an ACC change, so this is where we catch
+		// ignition transitions.
 		if si := parsed.StatusInfo; si != nil {
 			log.Debug(map[string]any{
 				"event": "heartbeat", "serial": s.serial,
 				"ignition": si.Ignition, "voltage_level": si.VoltageLevel,
 				"gsm_signal": si.GSMSignal, "charging": si.Charging,
 			})
+			s.reconcileIgnition(si.Ignition)
 		}
 	default:
 		// Not login/location/heartbeat/alarm — e.g. an extended GT06 location
@@ -308,6 +317,29 @@ func (s *session) SendCommand(context.Context, gateway.Command) (gateway.Command
 
 // SupportedCommands reports no controllable commands.
 func (s *session) SupportedCommands() []string { return nil }
+
+// reconcileIgnition emits an IGNITION:ON / IGNITION:OFF event when the device's
+// ACC state changes. The first observation only establishes the baseline (no
+// event), so a reconnect — which starts a fresh session — never fires a spurious
+// transition. Only runs once the device is approved.
+func (s *session) reconcileIgnition(acc int) {
+	if s.gate != gateApproved || s.ignition == acc {
+		return
+	}
+	prev := s.ignition
+	s.ignition = acc
+	if prev < 0 {
+		return // baseline established; emit only on subsequent transitions
+	}
+	event := "IGNITION:OFF"
+	if acc != 0 {
+		event = "IGNITION:ON"
+	}
+	s.conn.Deps.Log.With("tcp/fleetiger").Debug(map[string]any{"event": "ignition_event", "serial": s.serial, "emit": event, "ignition": acc})
+	s.conn.Emit(s.serial, deviceMake, deviceModel, "event", map[string]any{
+		"imei": s.serial, "event": event, "ignition": float64(acc),
+	})
+}
 
 func (s *session) serialOrUnknown() string {
 	if s.serial == "" {
