@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { LivePlayer } from "@/components/LivePlayer";
+import { useGatewayInfo } from "@/lib/useGatewayInfo";
 import { PageHeader } from "@/components/ui";
 
 export default function LivePage({ params }: { params: { serial: string } }) {
   const serial = decodeURIComponent(params.serial);
+  const caps = useGatewayInfo()?.capabilities;
   return (
     <div>
       <PageHeader
@@ -21,7 +23,13 @@ export default function LivePage({ params }: { params: { serial: string } }) {
           </Link>
         }
       />
-      <LivePlayer serial={serial} />
+      {caps && !caps.has_video ? (
+        <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
+          Video is not enabled for this gateway.
+        </div>
+      ) : (
+        <LivePlayer serial={serial} />
+      )}
     </div>
   );
 }

@@ -42,6 +42,23 @@ Authenticated connectivity check.
 200 { "ok": true }
 ```
 
+### `GET /api/gateway/info`
+This gateway's unit type and **effective** capabilities — what the unit declares
+AND what runtime config enables (e.g. `has_video` is true only when the unit
+supports video and `MEDIA_ADVERTISE_HOST` is set; `has_clips` also needs a
+database). The admin panel reads it once to hide UI for features this build/config
+doesn't offer.
+
+```json
+200 {
+  "unit": "howen",
+  "capabilities": {
+    "has_video": true, "has_commands": true, "has_config": true,
+    "has_status": true, "has_clips": true, "has_mappings": true
+  }
+}
+```
+
 ### `GET /api/units`
 List currently-connected devices.
 

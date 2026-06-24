@@ -3,6 +3,7 @@
 import { Fragment, useState } from "react";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
+import { useGatewayInfo } from "@/lib/useGatewayInfo";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 
 type Unit = { serial: string; model: string; state?: string };
@@ -42,6 +43,7 @@ function defaultRange() {
 }
 
 export default function ClipsPage() {
+  const caps = useGatewayInfo()?.capabilities;
   const units = useFetch<{ units: Unit[] }>("units", 8000);
   const clips = useFetch<{ clips: Clip[] }>("clips", 4000);
   const range = defaultRange();
@@ -165,6 +167,19 @@ export default function ClipsPage() {
     } catch (e: any) {
       setError(e.message || "Failed to delete clip");
     }
+  }
+
+  // Defense-in-depth behind the hidden nav link: a user could still reach /clips
+  // by URL on a gateway whose unit/config has no video.
+  if (caps && !caps.has_clips) {
+    return (
+      <div>
+        <PageHeader title="Clips" subtitle="Find footage on a device's SD card and store it on the server" />
+        <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
+          Video is not enabled for this gateway, so recorded clips are unavailable.
+        </div>
+      </div>
+    );
   }
 
   return (

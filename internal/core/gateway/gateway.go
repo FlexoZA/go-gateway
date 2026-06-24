@@ -16,7 +16,9 @@ import (
 
 	"github.com/dfm/device-gateway/internal/core/config"
 	"github.com/dfm/device-gateway/internal/core/device"
+	"github.com/dfm/device-gateway/internal/core/flow"
 	"github.com/dfm/device-gateway/internal/core/logging"
+	"github.com/dfm/device-gateway/internal/core/mapping"
 	"github.com/dfm/device-gateway/internal/core/media"
 	"github.com/dfm/device-gateway/internal/core/message"
 )
@@ -77,10 +79,54 @@ type ConfigController interface {
 }
 
 // Capabilities declares what a unit type supports. GPS-only trackers leave the
-// optional capabilities false so no video/command code is wired in.
+// optional capabilities false so no video/command code is wired in. These are the
+// unit's *declared* features; the running gateway's *effective* capabilities
+// (declared AND enabled by config) are reported separately — see
+// EffectiveCapabilities.
 type Capabilities struct {
 	HasVideo    bool
 	HasCommands bool
+	HasConfig   bool // session implements ConfigController
+	HasStatus   bool // session implements StatusReporter
+}
+
+// EffectiveCapabilities is what the running gateway actually offers right now: the
+// unit's declared capabilities gated by runtime configuration (e.g. video needs a
+// media advertise host; clips need a database). Surfaced to the admin panel via
+// GET /api/gateway/info so it can hide UI for features this build/config lacks.
+type EffectiveCapabilities struct {
+	HasVideo    bool `json:"has_video"`    // unit HasVideo AND video enabled (MEDIA_ADVERTISE_HOST set)
+	HasCommands bool `json:"has_commands"` // unit HasCommands
+	HasConfig   bool `json:"has_config"`   // unit HasConfig
+	HasStatus   bool `json:"has_status"`   // unit HasStatus
+	HasClips    bool `json:"has_clips"`    // video enabled AND database present
+	HasMappings bool `json:"has_mappings"` // unit implements MappingProvider
+}
+
+// MappingProvider is implemented by a Protocol whose event output is driven by
+// editable code→event mappings and/or per-model workflows. The app runner uses it
+// to seed defaults, apply the DB-loaded set, and apply workflows WITHOUT importing
+// the unit package. A unit with no editable mappings (e.g. a plain GPS tracker)
+// does not implement it, and the runner skips all mapping/workflow wiring.
+type MappingProvider interface {
+	DefaultMappingEntries() []mapping.Entry
+	ApplyMappings(mapping.Table)
+	ApplyWorkflows(map[string]*flow.Graph)
+	WorkflowModelCount() int
+}
+
+// MediaListener is a device-side media accept loop (a separate TCP port from the
+// control server) that a video-capable unit runs to receive video frames.
+type MediaListener interface {
+	ListenAndServe(ctx context.Context) error
+}
+
+// MediaServerProvider is implemented by a Protocol that runs its own device-side
+// media listener. The app runner starts it only when video is enabled (a media
+// manager is present). The returned listener is fully configured to bind addr and
+// write into mgr/clips.
+type MediaServerProvider interface {
+	NewMediaServer(addr string, mgr *media.Manager, clips *media.ClipRegistry, log *logging.Logger) MediaListener
 }
 
 // Frame is one decoded protocol message.

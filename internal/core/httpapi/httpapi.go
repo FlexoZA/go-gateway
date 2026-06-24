@@ -104,6 +104,7 @@ type Server struct {
 	internalToken string
 	hlsRoot       string
 	clipsRoot     string
+	caps          gateway.EffectiveCapabilities
 	srv           *http.Server
 }
 
@@ -118,6 +119,10 @@ func (s *Server) SetHLSRoot(dir string) { s.hlsRoot = dir }
 // SetClipsRoot sets the directory recorded-clip .mp4 files are stored under (the
 // bucket), used by the clip download handler.
 func (s *Server) SetClipsRoot(dir string) { s.clipsRoot = dir }
+
+// SetCapabilities records the gateway's effective capabilities, served at
+// GET /api/gateway/info so the admin panel can hide UI this build/config lacks.
+func (s *Server) SetCapabilities(c gateway.EffectiveCapabilities) { s.caps = c }
 
 // New builds the API server. unit is this gateway's unit type (e.g. "howen"),
 // used as the default for mapping endpoints. If verifier is nil, protected
@@ -138,6 +143,9 @@ func New(host string, port int, unit string, verifier KeyVerifier, data DataStor
 	// Protected route group. All inherit the API-key check.
 	protected := map[string]http.HandlerFunc{
 		"GET /api/ping": s.handlePing,
+
+		// This gateway's unit type + effective capabilities (drives admin-panel UI).
+		"GET /api/gateway/info": s.handleGatewayInfo,
 
 		// Admin auth: verify a front-end user's credentials (the BFF calls this
 		// holding the API key, then issues its own session cookie).
@@ -249,6 +257,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handlePing(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// GET /api/gateway/info — this gateway's unit type and effective capabilities
+// (declared by the unit AND enabled by config). The admin panel reads it once to
+// hide UI for features this build/config doesn't offer.
+func (s *Server) handleGatewayInfo(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"unit":         s.unit,
+		"capabilities": s.caps,
+	})
 }
 
 // POST /api/auth/login — verify a front-end user's email/password.

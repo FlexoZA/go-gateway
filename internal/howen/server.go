@@ -1,8 +1,9 @@
-// Package howen implements the Howen H-Protocol unit type as a gateway plugin.
-//
-// Milestone 1 scope: device registration/approval, GPS status, and alarm/event
-// telemetry forwarded to the universal webhook. Video/media and device control
-// are declared as capabilities for later milestones but not wired here.
+// Package howen implements the Howen H-Protocol unit type as a gateway plugin,
+// and serves as the reference for a full-featured unit: device
+// registration/approval, GPS status, and alarm/event telemetry to the universal
+// webhook, plus live video (VideoController + MediaServerProvider), recorded clips,
+// device parameter config (ConfigController), live status (StatusReporter), control
+// commands (Commander), and editable event mappings/workflows (MappingProvider).
 package howen
 
 import (
@@ -16,7 +17,9 @@ import (
 	"time"
 
 	"github.com/dfm/device-gateway/internal/core/device"
+	"github.com/dfm/device-gateway/internal/core/flow"
 	"github.com/dfm/device-gateway/internal/core/gateway"
+	"github.com/dfm/device-gateway/internal/core/mapping"
 )
 
 const (
@@ -37,10 +40,21 @@ func New() *Protocol { return &Protocol{} }
 func (*Protocol) Name() string { return "howen" }
 
 func (*Protocol) Capabilities() gateway.Capabilities {
-	// Control commands and live video are implemented (video is active only when
-	// the gateway is configured with a media advertise host).
-	return gateway.Capabilities{HasVideo: true, HasCommands: true}
+	// Control commands, live video, parameter config, and status reporting are all
+	// implemented (video is active only when the gateway is configured with a media
+	// advertise host — see the runner's effective-capability computation).
+	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true}
 }
+
+// MappingProvider: the Howen unit drives its event output from editable code→event
+// mappings and per-model workflows. These thin methods let the app runner seed,
+// load, and apply them without importing this package; they delegate to the
+// package-level mapping state (one process per unit, so a singleton is equivalent
+// to instance state and the hot read path stays untouched).
+func (*Protocol) DefaultMappingEntries() []mapping.Entry  { return DefaultMappingEntries() }
+func (*Protocol) ApplyMappings(t mapping.Table)           { ApplyMappings(t) }
+func (*Protocol) ApplyWorkflows(m map[string]*flow.Graph) { ApplyWorkflows(m) }
+func (*Protocol) WorkflowModelCount() int                 { return WorkflowModelCount() }
 
 // ReadFrame decodes one H-Protocol frame from the stream.
 func (*Protocol) ReadFrame(r *bufio.Reader) (gateway.Frame, error) {

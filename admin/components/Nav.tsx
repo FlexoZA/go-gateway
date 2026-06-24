@@ -3,20 +3,24 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { logout } from "@/lib/api";
-
-const links = [
-  { href: "/", label: "Dashboard" },
-  { href: "/devices", label: "Devices" },
-  { href: "/clips", label: "Clips" },
-  { href: "/device-mapping", label: "Device Mapping" },
-  { href: "/server-settings", label: "Server Settings" },
-  { href: "/users", label: "Users" },
-  { href: "/api-keys", label: "API Keys" },
-  { href: "/logs", label: "Logs" },
-];
+import { useGatewayInfo } from "@/lib/useGatewayInfo";
 
 export function Nav() {
   const pathname = usePathname();
+  const caps = useGatewayInfo()?.capabilities;
+  // Gate capability-dependent links: shown until we positively know they're absent
+  // (a GPS-only gateway has no Clips; a unit without editable mappings has no
+  // Device Mapping). Static links are always present.
+  const links = [
+    { href: "/", label: "Dashboard" },
+    { href: "/devices", label: "Devices" },
+    ...(caps?.has_clips !== false ? [{ href: "/clips", label: "Clips" }] : []),
+    ...(caps?.has_mappings !== false ? [{ href: "/device-mapping", label: "Device Mapping" }] : []),
+    { href: "/server-settings", label: "Server Settings" },
+    { href: "/users", label: "Users" },
+    { href: "/api-keys", label: "API Keys" },
+    { href: "/logs", label: "Logs" },
+  ];
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-edge bg-panel">
       <div className="border-b border-edge px-5 py-4">

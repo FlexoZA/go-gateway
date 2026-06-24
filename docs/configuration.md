@@ -74,13 +74,32 @@ make apikey ARGS='revoke --prefix dgw_AbCd'
 ```
 
 ### New unit type — `scripts/new-gateway.sh`
-Scaffold a new per-unit-type server from the GPS-only template:
+Scaffold a new unit type's **code** from the GPS-only template (a developer task,
+once per protocol). The generated `cmd/<unit>/main.go` is just
+`app.Run(<unit>.New())` — all shared wiring lives in `internal/core/app`:
 
 ```bash
 scripts/new-gateway.sh teltonika
-# implement ReadFrame + parsing in internal/teltonika/protocol.go, then:
-docker build -f deploy/Dockerfile --build-arg UNIT=teltonika -t device-gateway-teltonika .
+# then implement ReadFrame + parsing in internal/teltonika/protocol.go
 ```
+
+Add optional features by setting the flag in `Capabilities()` and implementing the
+matching interface (`VideoController`/`Commander`/`ConfigController`/`StatusReporter`,
+or the runner-detected `MappingProvider`/`MediaServerProvider`).
+
+### Provision a server — `scripts/provision-server.sh`
+Stand up a server for a unit whose code already exists (an operator task). Builds
+the **lean image** (only that unit compiles in) and writes a per-unit stack:
+
+```bash
+scripts/provision-server.sh teltonika
+docker compose -f deploy/docker-compose.teltonika.yml --env-file deploy/.env up -d --build
+```
+
+One unit per server — build-time selection keeps each image free of code (and
+dependencies like ffmpeg) for protocols it will never run. The admin panel reads
+the running gateway's effective capabilities from `GET /api/gateway/info` and hides
+UI for features this build/config lacks.
 
 ## Production notes
 

@@ -1,6 +1,8 @@
-# One service per unit type, all writing to a shared PostgreSQL. To add another
-# unit type, copy the howen service, change UNIT, the container/image name,
-# LISTEN_PORT and the published port.
+# The Howen stack. One unit type per server: to stand up a server for a different
+# unit, run `scripts/provision-server.sh <unit>` — it generates a
+# deploy/docker-compose.<unit>.yml from this file (renaming the howen service) and
+# builds the lean image. (Manual path: copy the howen service, change UNIT, the
+# container/image name and ports.)
 services:
   postgres:
     image: postgres:16-alpine

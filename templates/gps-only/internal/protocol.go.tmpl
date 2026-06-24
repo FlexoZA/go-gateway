@@ -26,10 +26,20 @@ func New() *Protocol { return &Protocol{} }
 
 func (*Protocol) Name() string { return unitName }
 
-// Capabilities: GPS-only trackers declare no video or command support, so no
-// dead media/control code is wired in.
+// Capabilities: GPS-only trackers declare nothing optional, so no dead
+// media/control/config code is wired in. To add a feature later, set the relevant
+// flag here AND have the session implement the matching interface:
+//   HasVideo    → gateway.VideoController
+//   HasCommands → gateway.Commander
+//   HasConfig   → gateway.ConfigController
+//   HasStatus   → gateway.StatusReporter
+//
+// Two further optional seams are detected by the app runner via type assertion on
+// *Protocol (implement only if needed; a GPS-only unit implements neither):
+//   gateway.MappingProvider     — editable code→event mappings + per-model workflows
+//   gateway.MediaServerProvider — a device-side media (video) accept loop
 func (*Protocol) Capabilities() gateway.Capabilities {
-	return gateway.Capabilities{HasVideo: false, HasCommands: false}
+	return gateway.Capabilities{} // all false
 }
 
 // ReadFrame decodes one frame. TODO: replace newline framing with the device's
@@ -89,14 +99,26 @@ func parseLine(line string) (map[string]any, string, bool) {
 	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
 		return nil, "", false
 	}
-	// Keys map directly into the universal webhook (latitude, longitude, speed,
-	// utc, positioning, ...). See internal/core/webhook for the full field set.
+	// These keys are read by the universal-message builder in
+	// internal/core/message/message.go (see Builder.Build). The full set it
+	// understands, all optional:
+	//   position : latitude, longitude, positioning, altitude, speed,
+	//              heading|bearing, satellites, hdop|accuracy, vdop, pdop, tdop
+	//   time     : utc (epoch seconds) or timestamp
+	//   identity : imei, serial_no, firm_ver|firmware_version, type, model
+	//   network  : signal_lvl|signal, signal_str, carrier, lac, data_mode
+	//   sim      : msisdn, iccid, imsi
+	//   trip     : odometer|mileage_km, trip_odo, gnss
+	//   events   : event (a string or array of event codes) — emit final codes
+	//              directly; the editable code→event remap (MappingProvider) is
+	//              only needed if you want it tunable from the admin panel
+	//   io       : inputs, outputs, aux_inputs, an_inputs, sensors, can_bus
+	// The serial comes from the OnFrame arg, not this map.
 	return map[string]any{
 		"latitude":    lat,
 		"longitude":   lon,
 		"speed":       speed,
 		"utc":         float64(utc),
 		"positioning": float64(1),
-		"name":        "gps",
 	}, serial, true
 }

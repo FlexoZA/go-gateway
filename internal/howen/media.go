@@ -9,9 +9,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dfm/device-gateway/internal/core/gateway"
 	"github.com/dfm/device-gateway/internal/core/logging"
 	"github.com/dfm/device-gateway/internal/core/media"
 )
+
+// NewMediaServer implements gateway.MediaServerProvider: the app runner calls it
+// (only when video is enabled) to build the device-side media listener. *MediaServer
+// satisfies gateway.MediaListener via its ListenAndServe method.
+func (*Protocol) NewMediaServer(addr string, mgr *media.Manager, clips *media.ClipRegistry, log *logging.Logger) gateway.MediaListener {
+	return &MediaServer{Addr: addr, Manager: mgr, Clips: clips, Log: log}
+}
 
 // MediaServer accepts the Howen media (video) connections the device opens after
 // a live-preview command. It is a separate TCP listener from the control server:

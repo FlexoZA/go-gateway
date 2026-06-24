@@ -11,7 +11,7 @@ GO = docker run --rm -v $(CURDIR):/app -w /app \
 	$(GO_IMAGE) go
 endif
 
-.PHONY: build test vet image run-howen new golden
+.PHONY: build test vet image run-howen new provision golden
 
 build:
 	$(GO) build ./...
@@ -29,9 +29,14 @@ image:
 run-howen:
 	docker compose -f deploy/docker-compose.yml up --build
 
-# Scaffold a new unit type: make new UNIT=teltonika
+# Scaffold a new unit type's code: make new UNIT=teltonika
 new:
 	scripts/new-gateway.sh $(UNIT)
+
+# Provision a server for an existing unit (lean image + per-unit stack):
+#   make provision UNIT=howen
+provision:
+	scripts/provision-server.sh $(UNIT)
 
 # Regenerate the webhook golden file from the original JS adapter.
 golden:

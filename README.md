@@ -19,7 +19,8 @@ external database that stores all GPS and event data. The gateway's own
 **PostgreSQL** is used only for the **unit registry** (verifying connecting
 devices) and future **server-settings** tables; no telemetry is stored there.
 
-The first unit type implemented is **Howen** (GPS + events; video comes later).
+The first unit type implemented is **Howen** (GPS + events, live video, recorded
+clips, device config & status) — the reference for what a full-featured plugin does.
 
 ## Documentation
 
@@ -166,6 +167,7 @@ node tools/gen-webhook-golden.mjs /path/to/dfm-mvr-gateway
 cmd/howen/main.go              entrypoint: wires the framework to the Howen plugin
 internal/
   core/                        protocol-agnostic framework
+    app/                       composition root: wires deps around a Protocol, app.Run()
     config/                    env-driven configuration
     logging/                   structured JSON logger
     device/                    serial normalization + pluggable authorization
@@ -181,7 +183,8 @@ internal/
     gps.go                     status -> normalized payload
     server.go                  Protocol + Session: registration, GPS, alarms
 deploy/                        Dockerfile (generic, UNIT build arg) + compose
-scripts/new-gateway.sh         scaffold a new unit type
+scripts/new-gateway.sh         scaffold a new unit type's code
+scripts/provision-server.sh    stand up a server for an existing unit
 templates/gps-only/            starter plugin for a new GPS-only tracker
 ```
 
@@ -190,14 +193,37 @@ A unit-type plugin implements `gateway.Protocol`:
 ```go
 type Protocol interface {
     Name() string
-    Capabilities() Capabilities          // HasVideo, HasCommands
+    Capabilities() Capabilities          // HasVideo, HasCommands, HasConfig, HasStatus
     ReadFrame(r *bufio.Reader) (Frame, error)
     NewSession(c *Conn) Session
 }
 ```
 
 …and its `Session` handles frames, calling `conn.Emit(serial, make, model, kind,
-payload)` to forward a normalized payload. The framework does the rest.
+payload)` to forward a normalized payload. The framework does the rest — all the
+shared wiring lives in `internal/core/app`, so a unit-type binary is just:
+
+```go
+func main() { app.Run(howen.New()) }
+```
+
+Richer units add features by setting the matching `Capabilities` flag **and**
+implementing the optional interface the framework detects:
+
+| Feature | Set flag | Implement |
+|---|---|---|
+| Live video / clips | `HasVideo` | `gateway.VideoController` (+ `MediaServerProvider` for the media listener) |
+| Control commands | `HasCommands` | `gateway.Commander` |
+| Read/write config | `HasConfig` | `gateway.ConfigController` |
+| Live status detail | `HasStatus` | `gateway.StatusReporter` |
+| Editable event maps | — | `gateway.MappingProvider` |
+
+A plain GPS unit implements none of these; the runner skips that wiring and the
+admin panel hides the matching UI (it reads effective capabilities from
+`GET /api/gateway/info`). The optional interfaces are inherently protocol-specific
+— `internal/howen/` is the worked reference for implementing each (video in
+`video.go`/`media.go`, config in `config.go`, status in `status.go`, commands and
+mappings in `commands.go`/`events.go`).
 
 ## Quick start
 
@@ -251,21 +277,36 @@ config branching).
   is written back. Set `DEVICE_REJECT_UNKNOWN=true` for the stricter behaviour:
   unknown serials are recorded in `unknown_devices` and rejected.
 
-## Adding a new unit type
+## Adding a unit / standing up a server
+
+Two separate flows:
+
+**1. Author a new protocol's code** (a developer task — only once per unit type):
 
 ```bash
 scripts/new-gateway.sh teltonika
 ```
 
-This generates `internal/teltonika/protocol.go` (a GPS-only skeleton with
-newline framing and a placeholder CSV parser) and `cmd/teltonika/main.go`. Then:
+This generates `internal/teltonika/protocol.go` (a GPS-only skeleton with newline
+framing and a placeholder CSV parser) and a `cmd/teltonika/main.go` shim
+(`app.Run(teltonika.New())`). Then implement `ReadFrame` and the parser for your
+device's real wire format, emitting a payload whose keys map into the universal
+message (`latitude`, `longitude`, `speed`, `utc`, `event`, …). Add optional
+features per the capability table above.
 
-1. Implement `ReadFrame` and the parser in `internal/teltonika/protocol.go` for
-   your device's real wire format. Emit a payload whose keys map into the
-   universal message (`latitude`, `longitude`, `speed`, `utc`, `event`, …).
-2. Build: `docker build -f deploy/Dockerfile --build-arg UNIT=teltonika -t device-gateway-teltonika .`
-3. Add a service to `deploy/docker-compose.yml` (copy the `howen` service, set
-   `UNIT` and a unique `LISTEN_PORT` / published port).
+**2. Provision a server** for a unit whose code already exists (an operator task):
+
+```bash
+scripts/provision-server.sh teltonika
+```
+
+This builds the **lean image** `device-gateway-teltonika` (only that unit's code
+compiles in — a GPS-only unit carries no video/ffmpeg machinery) and writes a
+per-unit stack `deploy/docker-compose.teltonika.yml`. Edit `deploy/.env`, then
+`docker compose -f deploy/docker-compose.teltonika.yml --env-file deploy/.env up -d --build`.
+
+One unit per server; build-time selection keeps each image free of code for
+protocols it will never run.
 
 Devices with video/control set `Capabilities{HasVideo: true, ...}` and implement
 the additional milestone-2 hooks (see Roadmap).
