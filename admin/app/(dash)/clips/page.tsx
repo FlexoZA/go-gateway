@@ -3,10 +3,10 @@
 import { Fragment, useState } from "react";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
-import { useGatewayInfo } from "@/lib/useGatewayInfo";
+import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 
-type Unit = { serial: string; model: string; state?: string };
+type Unit = { serial: string; protocol: string; model: string; state?: string };
 type Recording = {
   camera: number;
   profile: number;
@@ -43,7 +43,8 @@ function defaultRange() {
 }
 
 export default function ClipsPage() {
-  const caps = useGatewayInfo()?.capabilities;
+  const info = useGatewayInfo();
+  const caps = info?.capabilities;
   const units = useFetch<{ units: Unit[] }>("units", 8000);
   const clips = useFetch<{ clips: Clip[] }>("clips", 4000);
   const range = defaultRange();
@@ -80,7 +81,9 @@ export default function ClipsPage() {
     setNotice(null);
   }
 
-  const unitList = units.data?.units ?? [];
+  // Only devices whose unit type supports clips/video can be searched here — a
+  // GPS-only unit (e.g. GT06) has no footage, so keep it out of the picker.
+  const unitList = (units.data?.units ?? []).filter((u) => capsForUnit(info, u.protocol)?.has_clips !== false);
   const clipList = clips.data?.clips ?? [];
   const effectiveSerial = serial || unitList[0]?.serial || "";
   const selectedUnit = unitList.find((u) => u.serial === effectiveSerial);
