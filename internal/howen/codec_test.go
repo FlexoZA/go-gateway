@@ -33,7 +33,7 @@ func TestParseLiveVoltageAlarm(t *testing.T) {
 	if ap == nil {
 		t.Fatal("nil parse")
 	}
-	if got := ap.EventCodes[0]; got != "BATTERY:LOW:EXT" {
+	if got := mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0]; got != "BATTERY:LOW:EXT" {
 		t.Fatalf("event = %q, want BATTERY:LOW:EXT", got)
 	}
 	if ap.Status == nil || ap.Status.Location == nil {
@@ -55,7 +55,7 @@ func TestParseLiveZeroVoltageAlarm(t *testing.T) {
 	if dt, _ := ap.Detail["dt"].(string); dt != "7" {
 		t.Fatalf("detail.dt = %q, want 7", dt)
 	}
-	if got := ap.EventCodes[0]; got != "BATTERY:ABNORMAL:EXT" {
+	if got := mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0]; got != "BATTERY:ABNORMAL:EXT" {
 		t.Fatalf("event = %q, want BATTERY:ABNORMAL:EXT", got)
 	}
 }
@@ -65,8 +65,8 @@ func TestParseLiveIgnitionOnAlarm(t *testing.T) {
 	if ap == nil || ap.EC == nil || ap.EC.(float64) != 31 {
 		t.Fatalf("ec = %v, want 31", ap.EC)
 	}
-	if ap.EventCodes[0] != "IGNITION:ON" {
-		t.Fatalf("event = %q", ap.EventCodes[0])
+	if mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0] != "IGNITION:ON" {
+		t.Fatalf("event = %q", mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0])
 	}
 	if ap.Status == nil || ap.Status.BasicStatus == nil || ap.Status.BasicStatus.Ignition != 1 {
 		t.Fatal("ignition should be 1")
@@ -78,8 +78,8 @@ func TestParseLiveIgnitionOffAlarm(t *testing.T) {
 	if ap == nil || ap.EC == nil || ap.EC.(float64) != 19 {
 		t.Fatalf("ec = %v, want 19", ap.EC)
 	}
-	if ap.EventCodes[0] != "IGNITION:OFF" {
-		t.Fatalf("event = %q", ap.EventCodes[0])
+	if mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0] != "IGNITION:OFF" {
+		t.Fatalf("event = %q", mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0])
 	}
 	if ap.Status.BasicStatus.Ignition != 0 {
 		t.Fatal("ignition should be 0")
@@ -94,8 +94,8 @@ func TestParseLiveDmsCellphoneAlarm(t *testing.T) {
 	if tp, _ := ap.Detail["tp"].(string); tp != "34" {
 		t.Fatalf("detail.tp = %q", tp)
 	}
-	if ap.EventCodes[0] != "AI:CELLPHONE" {
-		t.Fatalf("event = %q", ap.EventCodes[0])
+	if mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0] != "AI:CELLPHONE" {
+		t.Fatalf("event = %q", mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0])
 	}
 }
 
@@ -112,8 +112,8 @@ func TestParseLiveDiskDetectionAlarm(t *testing.T) {
 	if first["num"] != "sd1" {
 		t.Fatalf("detail[0].num = %v", first["num"])
 	}
-	if ap.EventCodes[0] != "ALARM:HARDWARE:FAULT" {
-		t.Fatalf("event = %q", ap.EventCodes[0])
+	if mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0] != "ALARM:HARDWARE:FAULT" {
+		t.Fatalf("event = %q", mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0])
 	}
 }
 

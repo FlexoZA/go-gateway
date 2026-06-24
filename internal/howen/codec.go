@@ -701,7 +701,6 @@ type alarmPayload struct {
 	Detail        map[string]any
 	DetailRaw     any
 	EC            any // numeric (float64) or nil
-	EventCodes    []string
 	EventStartUTC *int64
 	EventEndUTC   *int64
 	DeviceUTC     *int64
@@ -753,14 +752,13 @@ func parseHowenAlarmPayload(payload []byte) *alarmPayload {
 	}
 
 	ap := &alarmPayload{
-		Session:    session,
-		Alarm:      alarmObj,
-		AlarmRaw:   alarmRaw,
-		Detail:     detailObj,
-		DetailRaw:  detailRaw,
-		EC:         ec,
-		EventCodes: mapHowenEventCodes(ec, detailObj, alarmObj),
-		Status:     status,
+		Session:   session,
+		Alarm:     alarmObj,
+		AlarmRaw:  alarmRaw,
+		Detail:    detailObj,
+		DetailRaw: detailRaw,
+		EC:        ec,
+		Status:    status,
 	}
 	if alarmObj != nil {
 		if v, ok := parseHowenDateTime(alarmObj["st"]); ok {

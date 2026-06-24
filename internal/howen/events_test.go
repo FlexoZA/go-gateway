@@ -66,7 +66,7 @@ func TestMapHowenEventCodes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := mapHowenEventCodes(tc.code, tc.detail, tc.alarm)
+			got := mapHowenEventCodes("", tc.code, tc.detail, tc.alarm)
 			if got[0] != tc.want {
 				t.Fatalf("got %q, want %q", got[0], tc.want)
 			}

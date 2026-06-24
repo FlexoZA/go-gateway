@@ -283,12 +283,13 @@ func DefaultMappingEntries() []mapping.Entry {
 }
 
 // ApplyMappings installs the loaded alarm map as the active set, keeping the
-// built-in default when the loaded table lacks (or empties) the alarm map type.
-// Pass nil to reset to the built-in default.
-func ApplyMappings(loaded mapping.Table) {
+// built-in default when the table lacks (or empties) the alarm map type. FleeTiger
+// is a single-model unit, so it uses the unit default ("") table and ignores any
+// per-model tables. Pass nil to reset to the built-in default.
+func ApplyMappings(byModel mapping.ByModel) {
 	chosen := alarmEventCodes
-	if loaded != nil {
-		if m, ok := loaded[mapTypeAlarm]; ok && len(m) > 0 {
+	if t, ok := byModel[""]; ok {
+		if m, ok := t[mapTypeAlarm]; ok && len(m) > 0 {
 			chosen = m
 		}
 	}

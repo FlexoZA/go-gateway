@@ -43,9 +43,9 @@ function BitCell({ code }: { code: number }) {
   );
 }
 
-export function CodeMappingTable({ unit }: { unit: string }) {
+export function CodeMappingTable({ unit, model = "" }: { unit: string; model?: string }) {
   const { data, error, loading, refresh } = useFetch<{ unit: string; mappings: Mapping[] }>(
-    `mappings?unit=${encodeURIComponent(unit)}`,
+    `mappings?unit=${encodeURIComponent(unit)}&model=${encodeURIComponent(model)}`,
   );
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -62,7 +62,7 @@ export function CodeMappingTable({ unit }: { unit: string }) {
     try {
       await api("mappings", {
         method: "PUT",
-        body: JSON.stringify({ unit, map_type, code, event_code, description }),
+        body: JSON.stringify({ unit, model, map_type, code, event_code, description }),
       });
       await refresh();
     } catch (e: any) {
@@ -73,7 +73,7 @@ export function CodeMappingTable({ unit }: { unit: string }) {
   async function remove(map_type: string, code: number) {
     setActionError(null);
     try {
-      await api(`mappings?unit=${encodeURIComponent(unit)}&map_type=${encodeURIComponent(map_type)}&code=${code}`, { method: "DELETE" });
+      await api(`mappings?unit=${encodeURIComponent(unit)}&model=${encodeURIComponent(model)}&map_type=${encodeURIComponent(map_type)}&code=${code}`, { method: "DELETE" });
       await refresh();
     } catch (e: any) {
       setActionError(e.message || "Delete failed");
@@ -83,8 +83,16 @@ export function CodeMappingTable({ unit }: { unit: string }) {
   return (
     <div>
       <p className="mb-4 text-sm text-slate-400">
-        Flat code→event lookups for <span className="font-mono">{unit}</span>. Applies to all models. Edits reach the
-        running gateway within milliseconds.
+        Code→event lookups for <span className="font-mono">{unit}</span>
+        {model ? (
+          <>
+            {" · model "}
+            <span className="font-mono text-slate-200">{model}</span>
+          </>
+        ) : (
+          " · default (all models)"
+        )}
+        . Edits reach the running gateway within milliseconds.
       </p>
       <ErrorBanner message={actionError || error} />
 
@@ -93,7 +101,11 @@ export function CodeMappingTable({ unit }: { unit: string }) {
       {loading ? (
         <Spinner />
       ) : (data?.mappings?.length ?? 0) === 0 ? (
-        <Empty>No mappings found. The gateway seeds built-in defaults on startup.</Empty>
+        <Empty>
+          {model
+            ? "This model has no mappings of its own — it falls back to the default. Add rows below, or use “Copy from default” to start from the default table."
+            : "No mappings found. The gateway seeds built-in defaults on startup."}
+        </Empty>
       ) : (
         Object.entries(grouped).map(([mapType, rows]) => (
           <section key={mapType} className="mb-8">

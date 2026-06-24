@@ -109,7 +109,7 @@ type EffectiveCapabilities struct {
 // the runner skips all mapping wiring.
 type MappingProvider interface {
 	DefaultMappingEntries() []mapping.Entry
-	ApplyMappings(mapping.Table)
+	ApplyMappings(mapping.ByModel)
 }
 
 // MediaListener is a device-side media accept loop (a separate TCP port from the

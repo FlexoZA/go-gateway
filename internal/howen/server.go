@@ -55,7 +55,7 @@ func (*Protocol) DefaultDevicePort() int { return 33000 }
 // state (a singleton, equivalent to instance state here, keeping the hot read path
 // untouched).
 func (*Protocol) DefaultMappingEntries() []mapping.Entry { return DefaultMappingEntries() }
-func (*Protocol) ApplyMappings(t mapping.Table)          { ApplyMappings(t) }
+func (*Protocol) ApplyMappings(byModel mapping.ByModel)  { ApplyMappings(byModel) }
 
 // ReadFrame decodes one H-Protocol frame from the stream.
 func (*Protocol) ReadFrame(r *bufio.Reader) (gateway.Frame, error) {
@@ -358,7 +358,7 @@ func (s *session) handleAlarmData(ctx context.Context, payload []byte) error {
 		s.reconcileLifecycle(ctx, parsed.Status)
 		s.recordStatus(parsed.Status)
 	}
-	p := buildEventPayload(parsed, s.imei)
+	p := buildEventPayload(s.model, parsed, s.imei)
 	s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{
 		"event": "alarm_forward", "serial": s.serial, "ec": parsed.EC,
 		"mapped_events": p["event"], "model": s.model,

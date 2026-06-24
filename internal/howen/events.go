@@ -99,11 +99,29 @@ type Mappings struct {
 	EventCode          map[int]string
 }
 
-var currentMappings atomic.Pointer[Mappings]
+// currentMappingsByModel is the active per-model mapping sets, keyed by device
+// model. The empty-model key ("") is the unit-wide default. Swapped atomically by
+// ApplyMappings.
+var currentMappingsByModel atomic.Pointer[map[string]*Mappings]
 
-func init() { currentMappings.Store(defaultMappings()) }
+func init() {
+	m := map[string]*Mappings{"": defaultMappings()}
+	currentMappingsByModel.Store(&m)
+}
 
-func mappings() *Mappings { return currentMappings.Load() }
+// mappingsForModel returns the active mapping set for a device model: the model's
+// own table if it has one, else the unit default (""), else the built-in defaults.
+func mappingsForModel(model string) *Mappings {
+	if p := currentMappingsByModel.Load(); p != nil {
+		if m, ok := (*p)[model]; ok && m != nil {
+			return m
+		}
+		if m, ok := (*p)[""]; ok && m != nil {
+			return m
+		}
+	}
+	return defaultMappings()
+}
 
 func defaultMappings() *Mappings {
 	return &Mappings{
@@ -146,11 +164,10 @@ func DefaultMappingEntries() []mapping.Entry {
 	return entries
 }
 
-// ApplyMappings installs a loaded mapping table as the active set. For any
-// map_type missing or empty in the loaded table, the built-in default is kept,
-// so a partial/unavailable load can never wipe out mappings. Pass nil to reset
-// to the built-in defaults.
-func ApplyMappings(loaded mapping.Table) {
+// buildMappings builds a Mappings from one loaded table, keeping the built-in
+// default for any map_type missing or empty in the table (so a partial table can
+// never wipe out mappings).
+func buildMappings(loaded mapping.Table) *Mappings {
 	d := defaultMappings()
 	pick := func(mt string, def map[int]string) map[int]string {
 		if loaded != nil {
@@ -160,7 +177,7 @@ func ApplyMappings(loaded mapping.Table) {
 		}
 		return def
 	}
-	currentMappings.Store(&Mappings{
+	return &Mappings{
 		Input:              pick(mapTypeInput, d.Input),
 		VibrationDirection: pick(mapTypeVibrationDirection, d.VibrationDirection),
 		GeofenceStatus:     pick(mapTypeGeofenceStatus, d.GeofenceStatus),
@@ -168,7 +185,22 @@ func ApplyMappings(loaded mapping.Table) {
 		DmsAdas:            pick(mapTypeDmsAdas, d.DmsAdas),
 		MediaAlarmSubtype:  pick(mapTypeMediaAlarmSubtype, d.MediaAlarmSubtype),
 		EventCode:          pick(mapTypeEventCode, d.EventCode),
-	})
+	}
+}
+
+// ApplyMappings installs the loaded per-model mapping tables as the active set.
+// The empty-model table ("") is the unit default; each model's table is a full
+// table for that model (a model with no table falls back to the default). Pass nil
+// to reset to the built-in defaults.
+func ApplyMappings(byModel mapping.ByModel) {
+	out := map[string]*Mappings{}
+	for model, table := range byModel {
+		out[model] = buildMappings(table)
+	}
+	if _, ok := out[""]; !ok {
+		out[""] = defaultMappings()
+	}
+	currentMappingsByModel.Store(&out)
 }
 
 // numberOrNullInt parses a Howen detail value (string/number) into an int,
@@ -246,14 +278,15 @@ func parseHowenMediaAlarmSubtype(detail map[string]any) (int, bool) {
 }
 
 // mapHowenEventCodes ports howenCodec.js mapHowenEventCodes. `alarm` is the raw
-// alarm JSON object (used for the `et` end-time check). It reads the active
-// mapping set, which may have been overridden from the database.
-func mapHowenEventCodes(eventCode any, detail map[string]any, alarm map[string]any) []string {
+// alarm JSON object (used for the `et` end-time check). It reads the active mapping
+// set for the device's model (which may have been overridden from the database),
+// falling back to the unit default then the built-in defaults.
+func mapHowenEventCodes(model string, eventCode any, detail map[string]any, alarm map[string]any) []string {
 	code, ok := numberOrNullInt(eventCode)
 	if !ok {
 		return []string{"ALARM"}
 	}
-	m := mappings()
+	m := mappingsForModel(model)
 	events := []string{}
 	add := func(e string) {
 		if e == "" {

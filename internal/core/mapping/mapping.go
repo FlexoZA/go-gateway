@@ -5,8 +5,11 @@
 package mapping
 
 // Entry is one row of a unit's mapping table: within a named map_type, a raw
-// device code maps to an ACM Standard Event Code.
+// device code maps to an ACM Standard Event Code. Model scopes the row to a
+// specific device model; an empty Model is the unit-wide default that applies to
+// any model without its own table.
 type Entry struct {
+	Model       string
 	MapType     string
 	Code        int
 	EventCode   string
@@ -15,3 +18,7 @@ type Entry struct {
 
 // Table is a loaded set of mappings: map_type -> code -> event_code.
 type Table map[string]map[int]string
+
+// ByModel is a unit's mappings grouped by device model: model -> Table. The empty
+// model key ("") is the unit-wide default.
+type ByModel map[string]Table

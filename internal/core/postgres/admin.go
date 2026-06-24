@@ -146,12 +146,12 @@ func (s *Store) DeleteDevice(ctx context.Context, serial string) error {
 	return nil
 }
 
-// ListEventMappings returns the full editable mapping rows for a unit, ordered
-// for stable display.
-func (s *Store) ListEventMappings(ctx context.Context, unit string) ([]map[string]any, error) {
+// ListEventMappings returns the editable mapping rows for a unit and model (empty
+// model = the unit-wide default), ordered for stable display.
+func (s *Store) ListEventMappings(ctx context.Context, unit, model string) ([]map[string]any, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, unit, map_type, code, event_code, COALESCE(description, ''), updated_at
-		 FROM event_mappings WHERE unit = $1 ORDER BY map_type, code`, unit)
+		`SELECT id, unit, model, map_type, code, event_code, COALESCE(description, ''), updated_at
+		 FROM event_mappings WHERE unit = $1 AND model = $2 ORDER BY map_type, code`, unit, model)
 	if err != nil {
 		return nil, fmt.Errorf("list event mappings: %w", err)
 	}
@@ -160,15 +160,16 @@ func (s *Store) ListEventMappings(ctx context.Context, unit string) ([]map[strin
 	out := []map[string]any{}
 	for rows.Next() {
 		var id int64
-		var u, mapType, eventCode, description string
+		var u, m, mapType, eventCode, description string
 		var code int
 		var updatedAt any
-		if err := rows.Scan(&id, &u, &mapType, &code, &eventCode, &description, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &u, &m, &mapType, &code, &eventCode, &description, &updatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, map[string]any{
 			"id":          id,
 			"unit":        u,
+			"model":       m,
 			"map_type":    mapType,
 			"code":        code,
 			"event_code":  eventCode,
@@ -179,6 +180,41 @@ func (s *Store) ListEventMappings(ctx context.Context, unit string) ([]map[strin
 	return out, rows.Err()
 }
 
+// ListEventMappingModels returns the distinct non-empty models that have mappings
+// for a unit (so the admin can list per-model tables).
+func (s *Store) ListEventMappingModels(ctx context.Context, unit string) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT model FROM event_mappings WHERE unit = $1 AND model <> '' ORDER BY model`, unit)
+	if err != nil {
+		return nil, fmt.Errorf("list mapping models: %w", err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// CopyEventMappings copies every row from one model to another for a unit (used to
+// seed a new model's table from the default). Existing rows in the target are kept.
+func (s *Store) CopyEventMappings(ctx context.Context, unit, fromModel, toModel string) error {
+	if strings.TrimSpace(unit) == "" || fromModel == toModel {
+		return errors.New("unit required and source/target models must differ")
+	}
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO event_mappings (unit, model, map_type, code, event_code, description)
+		 SELECT unit, $3, map_type, code, event_code, description
+		 FROM event_mappings WHERE unit = $1 AND model = $2
+		 ON CONFLICT (unit, model, map_type, code) DO NOTHING`,
+		unit, fromModel, toModel)
+	return err
+}
+
 // UpsertEventMapping inserts or updates one mapping row. The change fires the
 // event_mappings NOTIFY, so the running gateway reloads it within milliseconds.
 func (s *Store) UpsertEventMapping(ctx context.Context, unit string, e mapping.Entry) error {
@@ -187,20 +223,20 @@ func (s *Store) UpsertEventMapping(ctx context.Context, unit string, e mapping.E
 		return errors.New("unit, map_type and event_code are required")
 	}
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO event_mappings (unit, map_type, code, event_code, description, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, now())
-		 ON CONFLICT (unit, map_type, code) DO UPDATE
+		`INSERT INTO event_mappings (unit, model, map_type, code, event_code, description, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, now())
+		 ON CONFLICT (unit, model, map_type, code) DO UPDATE
 		   SET event_code = EXCLUDED.event_code, description = EXCLUDED.description, updated_at = now()`,
-		unit, e.MapType, e.Code, e.EventCode, nullIfEmpty(e.Description))
+		unit, e.Model, e.MapType, e.Code, e.EventCode, nullIfEmpty(e.Description))
 	return err
 }
 
 // DeleteEventMapping removes one mapping row (reverting that code to the built-in
 // default). Fires the NOTIFY for an instant reload.
-func (s *Store) DeleteEventMapping(ctx context.Context, unit, mapType string, code int) error {
+func (s *Store) DeleteEventMapping(ctx context.Context, unit, model, mapType string, code int) error {
 	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM event_mappings WHERE unit = $1 AND map_type = $2 AND code = $3`,
-		unit, mapType, code)
+		`DELETE FROM event_mappings WHERE unit = $1 AND model = $2 AND map_type = $3 AND code = $4`,
+		unit, model, mapType, code)
 	if err != nil {
 		return err
 	}

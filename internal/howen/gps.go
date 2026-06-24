@@ -151,13 +151,16 @@ func buildGpsPayload(status *howenStatusData, imei string) map[string]any {
 	return p
 }
 
-// buildEventPayload assembles the payload for an ALARM_DATA message.
-func buildEventPayload(ap *alarmPayload, imei string) map[string]any {
+// buildEventPayload assembles the payload for an ALARM_DATA message, resolving the
+// event codes against the device model's mapping table (falling back to the unit
+// default then the built-in defaults).
+func buildEventPayload(model string, ap *alarmPayload, imei string) map[string]any {
 	p := statusCommonFields(ap.Status, imei)
 	p["name"] = "event"
 
-	events := make([]any, len(ap.EventCodes))
-	for i, e := range ap.EventCodes {
+	codes := mapHowenEventCodes(model, ap.EC, ap.Detail, ap.Alarm)
+	events := make([]any, len(codes))
+	for i, e := range codes {
 		events[i] = e
 	}
 	p["event"] = events

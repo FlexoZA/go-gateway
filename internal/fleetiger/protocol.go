@@ -99,7 +99,7 @@ func (*Protocol) SettingsSchema() []gateway.SettingField {
 // seed and apply mappings without importing this package; they delegate to the
 // package-level mapping state.
 func (*Protocol) DefaultMappingEntries() []mapping.Entry { return DefaultMappingEntries() }
-func (*Protocol) ApplyMappings(t mapping.Table)          { ApplyMappings(t) }
+func (*Protocol) ApplyMappings(byModel mapping.ByModel)  { ApplyMappings(byModel) }
 
 // ReadFrame decodes exactly one GT06 frame from the stream. It first resyncs to
 // the 0x78 0x78 start marker (discarding any inter-frame noise), reads the length

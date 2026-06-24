@@ -43,9 +43,13 @@ func (f *fakeData) ApproveDevice(_ context.Context, serial, _ string) error {
 }
 func (f *fakeData) RejectDevice(context.Context, string) error { return nil }
 func (f *fakeData) DeleteDevice(context.Context, string) error { return nil }
-func (f *fakeData) ListEventMappings(context.Context, string) ([]map[string]any, error) {
+func (f *fakeData) ListEventMappings(context.Context, string, string) ([]map[string]any, error) {
 	return f.mappings, nil
 }
+func (f *fakeData) ListEventMappingModels(context.Context, string) ([]string, error) {
+	return []string{}, nil
+}
+func (f *fakeData) CopyEventMappings(context.Context, string, string, string) error { return nil }
 func (f *fakeData) UpsertEventMapping(_ context.Context, _ string, e mapping.Entry) error {
 	if strings.TrimSpace(e.EventCode) == "" {
 		return errInput
@@ -53,7 +57,7 @@ func (f *fakeData) UpsertEventMapping(_ context.Context, _ string, e mapping.Ent
 	f.upserted = &e
 	return nil
 }
-func (f *fakeData) DeleteEventMapping(_ context.Context, _, _ string, code int) error {
+func (f *fakeData) DeleteEventMapping(_ context.Context, _, _, _ string, code int) error {
 	if code == 999 {
 		return errMissing
 	}

@@ -43,9 +43,11 @@ type DataStore interface {
 	RejectDevice(ctx context.Context, serial string) error
 	DeleteDevice(ctx context.Context, serial string) error
 
-	ListEventMappings(ctx context.Context, unit string) ([]map[string]any, error)
+	ListEventMappings(ctx context.Context, unit, model string) ([]map[string]any, error)
+	ListEventMappingModels(ctx context.Context, unit string) ([]string, error)
 	UpsertEventMapping(ctx context.Context, unit string, e mapping.Entry) error
-	DeleteEventMapping(ctx context.Context, unit, mapType string, code int) error
+	DeleteEventMapping(ctx context.Context, unit, model, mapType string, code int) error
+	CopyEventMappings(ctx context.Context, unit, fromModel, toModel string) error
 
 	ListGatewayErrors(ctx context.Context, limit, offset int) ([]map[string]any, error)
 	ListDeviceErrors(ctx context.Context, limit, offset int) ([]map[string]any, error)
@@ -283,9 +285,11 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		"DELETE /api/devices/{serial}":       s.handleDeleteDevice,
 
 		// Server settings: editable event mappings (instant via NOTIFY).
-		"GET /api/mappings":    s.handleListMappings,
-		"PUT /api/mappings":    s.handleUpsertMapping,
-		"DELETE /api/mappings": s.handleDeleteMapping,
+		"GET /api/mappings":        s.handleListMappings,
+		"PUT /api/mappings":        s.handleUpsertMapping,
+		"DELETE /api/mappings":     s.handleDeleteMapping,
+		"GET /api/mappings/models": s.handleListMappingModels,
+		"POST /api/mappings/copy":  s.handleCopyMappings,
 
 		// Editable server settings (global).
 		"GET /api/settings": s.handleListSettings,
@@ -1215,8 +1219,30 @@ func (s *Server) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": serial})
 }
 
-// GET /api/mappings?unit=howen — editable event mappings.
+// GET /api/mappings?unit=howen&model= — editable event mappings for a unit and
+// model (empty model = the unit-wide default).
 func (s *Server) handleListMappings(w http.ResponseWriter, r *http.Request) {
+	if !s.dataReady(w) {
+		return
+	}
+	unit, ok := s.requireUnit(w, r)
+	if !ok {
+		return
+	}
+	model := strings.TrimSpace(r.URL.Query().Get("model"))
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	rows, err := s.data.ListEventMappings(ctx, unit, model)
+	if err != nil {
+		s.dataError(w, "list_mappings", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"unit": unit, "model": model, "mappings": rows})
+}
+
+// GET /api/mappings/models?unit=howen — the distinct non-empty models that have
+// their own mapping table for a unit.
+func (s *Server) handleListMappingModels(w http.ResponseWriter, r *http.Request) {
 	if !s.dataReady(w) {
 		return
 	}
@@ -1226,12 +1252,49 @@ func (s *Server) handleListMappings(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	rows, err := s.data.ListEventMappings(ctx, unit)
+	models, err := s.data.ListEventMappingModels(ctx, unit)
 	if err != nil {
-		s.dataError(w, "list_mappings", err)
+		s.dataError(w, "list_mapping_models", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"unit": unit, "mappings": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"unit": unit, "models": models})
+}
+
+// POST /api/mappings/copy {"unit":"howen","from_model":"","to_model":"Hero-ME40"}
+// — seed a model's table by copying every row from another model (default ”).
+func (s *Server) handleCopyMappings(w http.ResponseWriter, r *http.Request) {
+	if !s.dataReady(w) {
+		return
+	}
+	var body struct {
+		Unit      string `json:"unit"`
+		FromModel string `json:"from_model"`
+		ToModel   string `json:"to_model"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	unit := s.unitOrDefault(body.Unit)
+	if !s.unitNames()[unit] {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown unit: " + unit})
+		return
+	}
+	if strings.TrimSpace(body.ToModel) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "to_model is required"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := s.data.CopyEventMappings(ctx, unit, strings.TrimSpace(body.FromModel), strings.TrimSpace(body.ToModel)); err != nil {
+		if isValidationErr(err) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		s.dataError(w, "copy_mappings", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "unit": unit, "to_model": body.ToModel})
 }
 
 // PUT /api/mappings — create or update one mapping row.
@@ -1241,6 +1304,7 @@ func (s *Server) handleUpsertMapping(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Unit        string `json:"unit"`
+		Model       string `json:"model"`
 		MapType     string `json:"map_type"`
 		Code        int    `json:"code"`
 		EventCode   string `json:"event_code"`
@@ -1257,7 +1321,7 @@ func (s *Server) handleUpsertMapping(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	entry := mapping.Entry{MapType: body.MapType, Code: body.Code, EventCode: body.EventCode, Description: body.Description}
+	entry := mapping.Entry{Model: strings.TrimSpace(body.Model), MapType: body.MapType, Code: body.Code, EventCode: body.EventCode, Description: body.Description}
 	if err := s.data.UpsertEventMapping(ctx, unit, entry); err != nil {
 		if isValidationErr(err) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -1278,6 +1342,7 @@ func (s *Server) handleDeleteMapping(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	model := strings.TrimSpace(r.URL.Query().Get("model"))
 	mapType := strings.TrimSpace(r.URL.Query().Get("map_type"))
 	codeStr := strings.TrimSpace(r.URL.Query().Get("code"))
 	if mapType == "" || codeStr == "" {
@@ -1291,7 +1356,7 @@ func (s *Server) handleDeleteMapping(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	if err := s.data.DeleteEventMapping(ctx, unit, mapType, code); err != nil {
+	if err := s.data.DeleteEventMapping(ctx, unit, model, mapType, code); err != nil {
 		if err.Error() == notFoundMsg {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "mapping not found"})
 			return
@@ -1299,7 +1364,7 @@ func (s *Server) handleDeleteMapping(w http.ResponseWriter, r *http.Request) {
 		s.dataError(w, "delete_mapping", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": map[string]any{"unit": unit, "map_type": mapType, "code": code}})
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": map[string]any{"unit": unit, "model": model, "map_type": mapType, "code": code}})
 }
 
 // GET /api/settings — all editable server settings.

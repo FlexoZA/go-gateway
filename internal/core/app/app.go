@@ -479,7 +479,7 @@ func (a *App) seedAndLoadMappings(ctx context.Context, u *unitRuntime) {
 		return
 	}
 	u.mp.ApplyMappings(loaded)
-	a.log.Info(map[string]any{"event": "mappings_loaded", "unit": u.name, "map_types": len(loaded)})
+	a.log.Info(map[string]any{"event": "mappings_loaded", "unit": u.name, "models": len(loaded)})
 }
 
 // seedEventCodes loads the embedded ACM Standard Event Codes into the database so
@@ -505,7 +505,7 @@ func (a *App) reloadMappings(ctx context.Context, u *unitRuntime) {
 		return
 	}
 	u.mp.ApplyMappings(loaded)
-	a.log.Debug(map[string]any{"event": "mappings_reloaded", "unit": u.name, "map_types": len(loaded)})
+	a.log.Debug(map[string]any{"event": "mappings_reloaded", "unit": u.name, "models": len(loaded)})
 }
 
 // refreshMappings periodically reloads a unit's mappings as a safety net behind

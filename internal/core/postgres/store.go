@@ -55,18 +55,26 @@ var schema = []string{
 		last_seen_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
 		status                TEXT DEFAULT 'quarantined'
 	)`,
-	// Front-end-editable event mappings: per unit, a named map_type maps a raw
-	// device code to an ACM Standard Event Code. Seeded from built-in defaults.
+	// Front-end-editable event mappings: per unit AND device model, a named map_type
+	// maps a raw device code to an ACM Standard Event Code. Seeded from built-in
+	// defaults under the empty model (the unit-wide default that applies to any model
+	// without its own table).
 	`CREATE TABLE IF NOT EXISTS event_mappings (
 		id          BIGSERIAL PRIMARY KEY,
 		unit        TEXT NOT NULL,
+		model       TEXT NOT NULL DEFAULT '',
 		map_type    TEXT NOT NULL,
 		code        INTEGER NOT NULL,
 		event_code  TEXT NOT NULL,
 		description TEXT,
-		updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-		UNIQUE (unit, map_type, code)
+		updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`,
+	// Migrate older tables that predate the model column, and move the uniqueness to
+	// include model (a unique index is idempotent, unlike ADD CONSTRAINT).
+	`ALTER TABLE event_mappings ADD COLUMN IF NOT EXISTS model TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE event_mappings DROP CONSTRAINT IF EXISTS event_mappings_unit_map_type_code_key`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS event_mappings_unit_model_map_type_code
+		ON event_mappings (unit, model, map_type, code)`,
 	// Fire a NOTIFY (carrying the unit) on any change so gateways reload mappings
 	// instantly instead of waiting for the periodic refresh.
 	`CREATE OR REPLACE FUNCTION notify_event_mappings_changed() RETURNS trigger AS $$
@@ -341,10 +349,10 @@ func (s *Store) SeedEventMappings(ctx context.Context, unit string, entries []ma
 	batch := &pgx.Batch{}
 	for _, e := range entries {
 		batch.Queue(
-			`INSERT INTO event_mappings (unit, map_type, code, event_code, description)
-			 VALUES ($1, $2, $3, $4, $5)
-			 ON CONFLICT (unit, map_type, code) DO NOTHING`,
-			unit, e.MapType, e.Code, e.EventCode, nullIfEmpty(e.Description),
+			`INSERT INTO event_mappings (unit, model, map_type, code, event_code, description)
+			 VALUES ($1, $2, $3, $4, $5, $6)
+			 ON CONFLICT (unit, model, map_type, code) DO NOTHING`,
+			unit, e.Model, e.MapType, e.Code, e.EventCode, nullIfEmpty(e.Description),
 		)
 	}
 	br := s.pool.SendBatch(ctx, batch)
@@ -401,26 +409,30 @@ func (s *Store) listenChannel(ctx context.Context, channel string, onChange func
 	}
 }
 
-// LoadEventMappings returns a unit's current mappings grouped by map_type.
-func (s *Store) LoadEventMappings(ctx context.Context, unit string) (mapping.Table, error) {
+// LoadEventMappings returns a unit's current mappings grouped by model then
+// map_type. The empty-model entry ("") is the unit-wide default.
+func (s *Store) LoadEventMappings(ctx context.Context, unit string) (mapping.ByModel, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT map_type, code, event_code FROM event_mappings WHERE unit = $1`, unit)
+		`SELECT model, map_type, code, event_code FROM event_mappings WHERE unit = $1`, unit)
 	if err != nil {
 		return nil, fmt.Errorf("load event mappings: %w", err)
 	}
 	defer rows.Close()
 
-	out := mapping.Table{}
+	out := mapping.ByModel{}
 	for rows.Next() {
-		var mapType, eventCode string
+		var model, mapType, eventCode string
 		var code int
-		if err := rows.Scan(&mapType, &code, &eventCode); err != nil {
+		if err := rows.Scan(&model, &mapType, &code, &eventCode); err != nil {
 			return nil, err
 		}
-		if out[mapType] == nil {
-			out[mapType] = map[int]string{}
+		if out[model] == nil {
+			out[model] = mapping.Table{}
 		}
-		out[mapType][code] = eventCode
+		if out[model][mapType] == nil {
+			out[model][mapType] = map[int]string{}
+		}
+		out[model][mapType][code] = eventCode
 	}
 	return out, rows.Err()
 }
