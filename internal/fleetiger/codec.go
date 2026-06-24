@@ -32,13 +32,14 @@ import (
 
 // GT06 protocol (message type) numbers.
 const (
-	protoLogin    = 0x01 // device → server: IMEI registration
-	protoLocation = 0x12 // device → server: GPS + LBS (no ACK)
-	protoStatus   = 0x13 // device → server: heartbeat / status (ACK)
-	protoString   = 0x15 // device → server: command echo
-	protoAlarm    = 0x16 // device → server: GPS + LBS + status + alarm (ACK)
-	protoGPSAddr  = 0x1a // device → server: GPS + phone number
-	protoServer   = 0x80 // server → device: remote command
+	protoLogin          = 0x01 // device → server: IMEI registration
+	protoLocation       = 0x12 // device → server: GPS + LBS (no ACK)
+	protoStatus         = 0x13 // device → server: heartbeat / status (ACK)
+	protoString         = 0x15 // device → server: command echo
+	protoAlarm          = 0x16 // device → server: GPS + LBS + status + alarm (ACK)
+	protoGPSAddr        = 0x1a // device → server: GPS + phone number
+	protoLocationStatus = 0x22 // device → server: GPS + LBS + status (extended location, no ACK)
+	protoServer         = 0x80 // server → device: remote command
 )
 
 // protocolNeedsAck reports whether the server must answer a packet with a 5-byte
@@ -346,6 +347,16 @@ func parseGt06Packet(packet []byte, tzOffsetHours float64) (*parsedPacket, error
 		if len(content) >= 18 {
 			gps := decodeGpsBlock(content, tzOffsetHours)
 			gps.LBS = decodeLbs(content, 18) // no LBS-length byte in 0x12
+			p.GPS = &gps
+		}
+	case protoLocationStatus:
+		// 0x22: GPS + LBS + status (extended location variant some GT06 firmware
+		// sends instead of 0x12). The leading 18-byte GPS block matches 0x12, so we
+		// decode it the same way; the trailing LBS/ACC/mileage layout varies by
+		// firmware, so we forward the GPS fix and leave the extended tail for later.
+		if len(content) >= 18 {
+			gps := decodeGpsBlock(content, tzOffsetHours)
+			gps.LBS = decodeLbs(content, 18)
 			p.GPS = &gps
 		}
 	case protoAlarm:

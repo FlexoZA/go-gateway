@@ -107,6 +107,42 @@ func TestParseLocation(t *testing.T) {
 	}
 }
 
+// TestParseLocationStatus0x22 decodes the extended location variant (0x22) that
+// the real FleeTiger unit sends instead of base 0x12. The GPS block layout matches
+// 0x12, so the same decoder applies. Coordinates are the real Johannesburg fix
+// captured from device 868755137537288.
+func TestParseLocationStatus0x22(t *testing.T) {
+	content := []byte{
+		0x1a, 0x06, 0x18, 0x0c, 0x35, 0x1e, // 2026-06-24 12:53:30
+		0xcd,                   // GPS info length (hi nibble) + 13 satellites
+		0x02, 0xcc, 0x6b, 0xbe, // latitude raw  (~ -26.08, South)
+		0x02, 0xff, 0x55, 0x75, // longitude raw (~  27.97, East)
+		0x00,       // speed
+		0x50, 0x34, // status: bit4 positioned, South + East, course 0x34
+		// extended status/LBS tail (not decoded by the GPS block)
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	}
+	p, err := parseGt06Packet(buildFrame(protoLocationStatus, content, 0x020d), 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if p.Protocol != protoLocationStatus {
+		t.Fatalf("protocol = 0x%02X, want 0x22", p.Protocol)
+	}
+	if !p.CRCValid || p.GPS == nil {
+		t.Fatalf("expected a valid GPS block, got %+v", p)
+	}
+	if p.GPS.Satellites != 13 || p.GPS.Positioning != 1 {
+		t.Fatalf("satellites=%d positioning=%d, want 13 / 1", p.GPS.Satellites, p.GPS.Positioning)
+	}
+	if math.Abs(p.GPS.Latitude-(-26.08)) >= 0.05 {
+		t.Fatalf("latitude = %v, want ~-26.08", p.GPS.Latitude)
+	}
+	if math.Abs(p.GPS.Longitude-27.97) >= 0.05 {
+		t.Fatalf("longitude = %v, want ~27.97", p.GPS.Longitude)
+	}
+}
+
 // TestTimezoneOffset confirms a +2h device-local time shifts UTC back by 7200s.
 func TestTimezoneOffset(t *testing.T) {
 	packet := hexBytes(t, "78 78 1F 12 0B 08 1D 11 2E 10 CF 02 7A C7 EB 0C 46 58 49 00 14 8F "+

@@ -199,10 +199,10 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 	case protoLogin:
 		// Login carries no position to forward; it triggers the device gate check.
 		return s.handleLogin(ctx)
-	case protoLocation:
+	case protoLocation, protoLocationStatus:
 		if s.gate == gateApproved && parsed.GPS != nil {
 			log.Debug(map[string]any{
-				"event": "gps_forward", "serial": s.serial,
+				"event": "gps_forward", "serial": s.serial, "protocol": parsed.Protocol,
 				"lat": parsed.GPS.Latitude, "lon": parsed.GPS.Longitude,
 				"speed": parsed.GPS.Speed, "sats": parsed.GPS.Satellites, "positioning": parsed.GPS.Positioning,
 			})
