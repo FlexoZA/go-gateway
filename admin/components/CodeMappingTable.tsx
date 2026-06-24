@@ -44,10 +44,11 @@ function BitCell({ code }: { code: number }) {
   );
 }
 
-export function CodeMappingTable() {
-  const { data, error, loading, refresh } = useFetch<{ unit: string; mappings: Mapping[] }>("mappings");
+export function CodeMappingTable({ unit }: { unit: string }) {
+  const { data, error, loading, refresh } = useFetch<{ unit: string; mappings: Mapping[] }>(
+    `mappings?unit=${encodeURIComponent(unit)}`,
+  );
   const [actionError, setActionError] = useState<string | null>(null);
-  const unit = data?.unit ?? "howen";
 
   const grouped = useMemo(() => {
     const g: Record<string, Mapping[]> = {};
@@ -73,7 +74,7 @@ export function CodeMappingTable() {
   async function remove(map_type: string, code: number) {
     setActionError(null);
     try {
-      await api(`mappings?map_type=${encodeURIComponent(map_type)}&code=${code}`, { method: "DELETE" });
+      await api(`mappings?unit=${encodeURIComponent(unit)}&map_type=${encodeURIComponent(map_type)}&code=${code}`, { method: "DELETE" });
       await refresh();
     } catch (e: any) {
       setActionError(e.message || "Delete failed");

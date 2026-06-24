@@ -3,7 +3,7 @@
 # Build & publish script for device-gateway.
 #
 # Unlike the old single-image gateway, this project ships TWO images:
-#   - the gateway  (deploy/Dockerfile, UNIT=howen)  -> flexoza/go-gateway
+#   - the gateway  (deploy/Dockerfile, UNIT=gateway) -> flexoza/go-gateway
 #   - the admin UI (admin/Dockerfile)               -> flexoza/go-gateway-admin
 #
 # This script:
@@ -110,7 +110,7 @@ echo "Building images (version: ${IMAGE_TAG})"
 echo "========================================"
 
 echo "Building gateway: ${GATEWAY_TAGGED}"
-docker build -f deploy/Dockerfile --build-arg UNIT=howen -t "${GATEWAY_TAGGED}" .
+docker build -f deploy/Dockerfile --build-arg UNIT=gateway -t "${GATEWAY_TAGGED}" .
 echo "✅ Gateway built"
 echo ""
 

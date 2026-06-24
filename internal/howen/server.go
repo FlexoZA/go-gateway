@@ -46,6 +46,10 @@ func (*Protocol) Capabilities() gateway.Capabilities {
 	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true}
 }
 
+// DefaultDevicePort is the port Howen devices dial when no <UNIT>_PORT override is
+// set. Lets one gateway process host Howen alongside other units.
+func (*Protocol) DefaultDevicePort() int { return 33000 }
+
 // MappingProvider: the Howen unit drives its event output from editable code→event
 // mappings and per-model workflows. These thin methods let the app runner seed,
 // load, and apply them without importing this package; they delegate to the

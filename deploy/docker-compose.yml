@@ -1,8 +1,7 @@
-# The Howen stack. One unit type per server: to stand up a server for a different
-# unit, run `scripts/provision-server.sh <unit>` — it generates a
-# deploy/docker-compose.<unit>.yml from this file (renaming the howen service) and
-# builds the lean image. (Manual path: copy the howen service, change UNIT, the
-# container/image name and ports.)
+# The multi-unit gateway stack: ONE gateway process hosting every registered unit
+# type (see cmd/gateway — currently howen + fleetiger), each on its own port,
+# behind one Postgres registry, telemetry webhook, HTTP API, and admin panel.
+# Adding a unit is a one-line change in cmd/gateway plus its port mapping below.
 services:
   postgres:
     image: postgres:16-alpine
@@ -13,10 +12,6 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-gateway}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # Not published to the host: the gateway reaches Postgres over the compose
-    # network. Publishing 5432 only invites port conflicts (e.g. another stack's
-    # Postgres on the same box). Add a ports mapping yourself if you need external
-    # DB access for debugging.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gateway} -d ${POSTGRES_DB:-gateway}"]
       interval: 5s
@@ -24,58 +19,53 @@ services:
       retries: 10
     restart: unless-stopped
 
-  howen:
+  gateway:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
       args:
-        UNIT: howen
-    image: device-gateway-howen:latest
-    container_name: device-gateway-howen
+        UNIT: gateway
+    image: device-gateway:latest
+    container_name: device-gateway
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       - GATEWAY=${GATEWAY:-dfm-gw1.cwe.cloud}
       - LISTEN_HOST=0.0.0.0
-      - LISTEN_PORT=33000
+      # Per-unit device ports. Each unit declares a default (howen 33000, fleetiger
+      # 8050); override here if needed. Keep these in sync with the ports mapping.
+      - HOWEN_PORT=${HOWEN_PORT:-33000}
+      - FLEETIGER_PORT=${FLEETIGER_PORT:-8050}
       # Management/control HTTP API (API-key protected). 0 disables.
       - HTTP_PORT=${HTTP_PORT:-8080}
       # Shared secret the admin panel uses to authenticate (works before any DB
-      # API key exists — enables first-run setup). Same value as the admin's
-      # GATEWAY_API_TOKEN. Generate: openssl rand -hex 32
+      # API key exists). Same value as the admin's GATEWAY_API_TOKEN.
       - INTERNAL_API_TOKEN=${ADMIN_API_TOKEN:-}
       # Telemetry sink: the universal-JSON endpoint that stores all GPS/event data.
-      - DEVICE_WEBHOOK_URL=${DEVICE_WEBHOOK_URL:-http://gateway.acmtrack.net:8080/universal/gps/json/}
-      # Gateway's own DB — device-verification registry (NOT telemetry).
+      - DEVICE_WEBHOOK_URL=${DEVICE_WEBHOOK_URL:-}
+      # Gateway's own DB — device-verification registry + per-unit settings/mappings.
       - DATABASE_URL=postgres://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway}@postgres:5432/${POSTGRES_DB:-gateway}?sslmode=disable
-      # allow_all | postgres (defaults to postgres when DATABASE_URL is set)
       - DEVICE_AUTH_MODE=${DEVICE_AUTH_MODE:-postgres}
-      # true = quarantine + reject unknown serials (require approval, default);
-      # false = auto-provision + admit
       - DEVICE_REJECT_UNKNOWN=${DEVICE_REJECT_UNKNOWN:-true}
-      # Mapping edits apply instantly via NOTIFY; this is a safety-net reload
-      # interval in case a notification is missed (seconds; 0 disables the net).
       - MAPPING_REFRESH_SECONDS=${MAPPING_REFRESH_SECONDS:-60}
-      # Live video (HLS). MEDIA_ADVERTISE_HOST is the host devices dial back for
-      # media frames (no port) — usually the gateway's public hostname. Empty
-      # DISABLES video. The media port (33001) must be published below + reachable.
+      # Live video (HLS) for video-capable units (howen). MEDIA_ADVERTISE_HOST is
+      # the host devices dial back for media frames (no port); empty DISABLES video.
       - MEDIA_ADVERTISE_HOST=${MEDIA_ADVERTISE_HOST:-}
       - MEDIA_PORT=${MEDIA_PORT:-33001}
-      # Recorded clips ("bucket") are stored here on a persistent volume.
       - CLIPS_ROOT=${CLIPS_ROOT:-/var/lib/gateway/clips}
-      # Device's local-clock offset from UTC (e.g. 2 for SAST). Howen indexes
-      # recordings by local wall-clock, so clip playback windows are localized by
-      # this. Clip times in the DB/API stay UTC. Wrong value → err=6 (no file).
+      # Device local-clock offset fallback (a unit's own settings override it, e.g.
+      # fleetiger's timezone). 2 for SAST, 0 for UTC.
       - DEVICE_TZ_OFFSET=${DEVICE_TZ_OFFSET:-0}
-      # Set DEBUG=1 (or DEBUG=tcp/howen) for verbose per-frame logging.
+      # Set DEBUG=1 (or DEBUG=tcp/howen,tcp/fleetiger) for verbose per-frame logging.
       - DEBUG=${DEBUG:-}
     volumes:
       - clipdata:/var/lib/gateway/clips
     ports:
-      - "33000:33000"
-      - "33001:33001"
-      - "8080:8080"
+      - "33000:33000"  # howen control
+      - "33001:33001"  # howen media
+      - "8050:8050"    # fleetiger
+      - "8080:8080"    # HTTP API
     restart: unless-stopped
 
   # Admin panel (Next.js). Talks to the gateway ONLY over its HTTP API, using a
@@ -87,19 +77,12 @@ services:
     image: device-gateway-admin:latest
     container_name: device-gateway-admin
     depends_on:
-      - howen
+      - gateway
     environment:
-      # The gateway HTTP API, reachable over the compose network.
-      - GATEWAY_URL=http://howen:8080
-      # Shared internal token the panel uses to authenticate to the gateway
-      # (same value as the gateway's INTERNAL_API_TOKEN). This is all the panel
-      # needs — no pre-minted DB key. Generate: openssl rand -hex 32
+      - GATEWAY_URL=http://gateway:8080
       - GATEWAY_API_TOKEN=${ADMIN_API_TOKEN:?set ADMIN_API_TOKEN in your .env}
-      # Secret for signing admin session cookies (>=16 chars). Required.
       - SESSION_SECRET=${SESSION_SECRET:?set SESSION_SECRET in your .env}
       - SESSION_TTL_HOURS=${SESSION_TTL_HOURS:-12}
-      # Keep cookies Secure (HTTPS) by default. Set false ONLY for a staging box
-      # served over plain HTTP, otherwise login silently fails behind a domain.
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
       - NODE_ENV=production
     ports:

@@ -3,19 +3,21 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { logout } from "@/lib/api";
-import { useGatewayInfo } from "@/lib/useGatewayInfo";
+import { useAggregateCaps, useUnits } from "@/lib/useGatewayInfo";
 
 export function Nav() {
   const pathname = usePathname();
-  const caps = useGatewayInfo()?.capabilities;
-  // Gate capability-dependent links: shown until we positively know they're absent
-  // (a GPS-only gateway has no Clips; a unit without editable mappings has no
-  // Device Mapping). Static links are always present.
+  // Union of capabilities across every hosted unit type: a link shows if ANY unit
+  // supports the feature (a GPS-only unit has no Clips; a unit without editable
+  // mappings has no Device Mapping). Shown until we positively know it's absent.
+  const caps = useAggregateCaps();
+  const hasUnitSettings = useUnits().some((u) => (u.schema?.length ?? 0) > 0);
   const links = [
     { href: "/", label: "Dashboard" },
     { href: "/devices", label: "Devices" },
     ...(caps?.has_clips !== false ? [{ href: "/clips", label: "Clips" }] : []),
     ...(caps?.has_mappings !== false ? [{ href: "/device-mapping", label: "Device Mapping" }] : []),
+    ...(hasUnitSettings ? [{ href: "/unit-settings", label: "Unit Settings" }] : []),
     { href: "/server-settings", label: "Server Settings" },
     { href: "/users", label: "Users" },
     { href: "/api-keys", label: "API Keys" },

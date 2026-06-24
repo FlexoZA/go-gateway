@@ -115,6 +115,72 @@ func TestEndToEndLocationForward(t *testing.T) {
 	}
 }
 
+// TestUnitSettingsTimezone confirms the session reads the timezone offset from the
+// editable unit settings (not just the env config): with a +2h offset, the
+// forwarded GPS timestamp is shifted 2h earlier than the UTC-decoded value.
+func TestUnitSettingsTimezone(t *testing.T) {
+	received := make(chan map[string]any, 2)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var msg map[string]any
+		_ = json.Unmarshal(body, &msg)
+		received <- msg
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	settings := gateway.NewUnitSettings()
+	settings.Replace(map[string]string{settingTimezoneOffset: "2"})
+
+	deps := gateway.Deps{
+		Config:       config.Config{ListenPort: 8050},
+		Log:          logging.New("test"),
+		Builder:      message.NewBuilder("test-gw", 0),
+		Sinks:        []gateway.Sink{webhook.New(ts.URL)},
+		Auth:         device.AllowAll{},
+		Hub:          gateway.NewHub(),
+		UnitSettings: settings,
+	}
+	srv := gateway.New(New(), deps)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Serve(ctx, ln)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	conn.Write(hexBytes(t, "78 78 0D 01 01 23 45 67 89 01 23 45 00 01 8C DD 0D 0A"))
+	ack := make([]byte, 10)
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	io.ReadFull(conn, ack)
+
+	location := hexBytes(t, "78 78 1F 12 0B 08 1D 11 2E 10 CF 02 7A C7 EB 0C 46 58 49 00 14 8F "+
+		"01 CC 00 28 7D 00 1F B8 00 03 80 81 0D 0A")
+	conn.Write(location)
+
+	// Expected UTC epoch when decoded with the +2h offset.
+	withTz, _ := parseGt06Packet(location, 2)
+	wantTS := time.Unix(withTz.GPS.UTC, 0).UTC().Format("2006-01-02T15:04:05") + "+00:00"
+
+	select {
+	case msg := <-received:
+		gps, _ := msg["gps"].(map[string]any)
+		if gps["timestamp"] != wantTS {
+			t.Fatalf("gps.timestamp = %v, want %s (tz from unit settings)", gps["timestamp"], wantTS)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for webhook")
+	}
+}
+
 // TestHeartbeatAcked confirms the gateway answers a heartbeat so the device keeps
 // the connection alive.
 func TestHeartbeatAcked(t *testing.T) {

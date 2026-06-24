@@ -1,13 +1,16 @@
 // Package app is the gateway composition root. It wires every unit-agnostic
 // dependency (config, logger, hub, message builder, Postgres registry, telemetry
-// webhook, media/clips, HTTP API) around a single gateway.Protocol and runs the
-// startup sequence. One App serves exactly one Protocol — a unit-type binary is
-// just `func main() { app.Run(myunit.New()) }`.
+// webhook, media/clips, HTTP API) around one OR MORE gateway.Protocol plugins and
+// runs the startup sequence. One process hosts every registered unit type, each on
+// its own TCP listener/port, sharing all the infrastructure above — a unit-type
+// binary is just `func main() { app.Run(unitA.New(), unitB.New()) }`.
 //
-// Unit-specific wiring is reached only through optional interfaces the Protocol
-// may implement (gateway.MappingProvider for editable event mappings/workflows,
-// gateway.MediaServerProvider for a device-side media listener); a unit that
-// implements neither — e.g. a plain GPS tracker — gets none of that machinery.
+// Unit-specific wiring is reached only through optional interfaces a Protocol may
+// implement (gateway.DefaultPort for its port, gateway.MappingProvider for editable
+// event mappings/workflows, gateway.ConfigurableUnit for unit-type settings,
+// gateway.MediaServerProvider for a device-side media listener, gateway.
+// IdleTimeoutProvider for a custom read deadline); a unit that implements none —
+// e.g. a plain GPS tracker — gets none of that machinery.
 package app
 
 import (
@@ -17,6 +20,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,53 +36,66 @@ import (
 	"github.com/dfm/device-gateway/internal/core/webhook"
 )
 
+// unitRuntime is one hosted unit type: its protocol plugin plus the per-unit state
+// the runner wires around it. deps is a clone of the shared base deps with this
+// unit's listen port (and, for a video unit, its media manager/clips) set.
+type unitRuntime struct {
+	proto    gateway.Protocol
+	name     string
+	port     int
+	deps     gateway.Deps
+	caps     gateway.EffectiveCapabilities
+	mp       gateway.MappingProvider  // nil unless the unit has editable mappings
+	cfgUnit  gateway.ConfigurableUnit // nil unless the unit declares settings
+	settings *gateway.UnitSettings    // non-nil iff cfgUnit != nil
+	media    *media.Manager           // nil unless a video unit with video enabled
+	clips    *media.ClipRegistry      // nil unless a video unit with a database
+}
+
 // App holds the composed gateway and every long-lived dependency.
 type App struct {
-	proto    gateway.Protocol
 	cfg      config.Config
 	log      *logging.Logger
 	hub      *gateway.Hub
 	builder  *message.Builder
-	deps     gateway.Deps
 	authMode string
 
-	store       *postgres.Store         // may be nil (no database)
-	webhookSink *webhook.Sink           // always wired (no-ops while empty)
-	mediaMgr    *media.Manager          // nil when video disabled
-	clipReg     *media.ClipRegistry     // nil when video/clips disabled
-	mp          gateway.MappingProvider // non-nil when the unit has editable mappings
+	store       *postgres.Store // may be nil (no database)
+	webhookSink *webhook.Sink   // always wired (no-ops while empty)
+
+	units []*unitRuntime
 }
 
-// Run builds and runs an App for proto, exiting non-zero on fatal error. This is
-// the entire body of a unit-type binary's main().
-func Run(proto gateway.Protocol) {
-	if err := New(proto).Run(); err != nil {
+// Run builds and runs an App for the given unit-type protocols, exiting non-zero
+// on fatal error. This is the entire body of a gateway binary's main().
+func Run(protos ...gateway.Protocol) {
+	if err := New(protos...).Run(); err != nil {
 		os.Exit(1)
 	}
 }
 
-// New composes an App for proto: loads config, opens the database (if any),
-// resolves the device port, wires the telemetry sink, and sets up video when
-// enabled. It does the same fatal-exit-on-database-failure as the old main.
-func New(proto gateway.Protocol) *App {
+// New composes an App: loads config, opens the database (if any), wires the shared
+// telemetry sink, and builds a per-unit runtime (resolved port, cloned deps, media
+// when enabled, settings holder) for each protocol. It fatal-exits on a database
+// failure, like the old single-unit main.
+func New(protos ...gateway.Protocol) *App {
 	cfg := config.Load()
-	log := logging.New(proto.Name())
+	log := logging.New("gateway")
 
 	a := &App{
-		proto:    proto,
 		cfg:      cfg,
 		log:      log,
 		hub:      gateway.NewHub(),
 		authMode: "allow_all",
 	}
-	if mp, ok := proto.(gateway.MappingProvider); ok {
-		a.mp = mp
-	}
 
 	// The message builder's gateway identifier is editable from server settings,
 	// so keep a reference to update it live below.
 	a.builder = message.NewBuilder(cfg.Gateway, cfg.WebhookTimezoneOffsetHours)
-	a.deps = gateway.Deps{
+
+	// Shared base dependencies. Each unit gets a value copy with its own port (and
+	// media/settings) below; Builder/Sinks/Auth/Hub are shared pointers/slices.
+	baseDeps := gateway.Deps{
 		Config:  cfg,
 		Log:     log,
 		Builder: a.builder,
@@ -97,10 +114,10 @@ func New(proto gateway.Protocol) *App {
 			os.Exit(1)
 		}
 		a.store = s
-		a.deps.DeviceErrors = s
+		baseDeps.DeviceErrors = s
 		log.Info(map[string]any{"event": "database", "backend": "postgres", "purpose": "device_registry"})
 		if cfg.DeviceAuthMode == "postgres" {
-			a.deps.Auth = s
+			baseDeps.Auth = s
 			a.authMode = "postgres"
 			log.Info(map[string]any{"event": "device_auth", "mode": "postgres", "reject_unknown": cfg.DeviceRejectUnknown})
 		}
@@ -108,273 +125,111 @@ func New(proto gateway.Protocol) *App {
 		log.Info(map[string]any{"event": "no_database", "detail": "DATABASE_URL not set; device auth = allow_all"})
 	}
 
-	// Device TCP port: a stored server setting can override LISTEN_PORT, applied on
-	// (re)start only — a bound listener cannot change live, and in Docker the
-	// container's published port must be updated to match. Resolve before binding.
-	if a.store != nil {
-		a.cfg.ListenPort = a.resolveDevicePort(a.cfg.ListenPort)
-		a.deps.Config.ListenPort = a.cfg.ListenPort
-	}
-
 	// The webhook is the telemetry sink — it stores all GPS/event data. Its URL is
-	// editable from the admin panel's server settings, so always wire the sink
-	// (it no-ops while empty) and start from the env value; the stored value is
-	// applied below once Postgres is available.
+	// editable from the admin panel; always wire the sink (it no-ops while empty)
+	// and start from the env value; the stored value is applied below.
 	a.webhookSink = webhook.New(cfg.WebhookURL)
-	a.deps.Sinks = append(a.deps.Sinks, a.webhookSink)
+	baseDeps.Sinks = append(baseDeps.Sinks, a.webhookSink)
 	if a.webhookSink.Enabled() {
 		log.Info(map[string]any{"event": "telemetry_sink", "backend": "webhook"})
 	} else {
 		log.Info(map[string]any{"event": "telemetry_sink_pending", "detail": "no webhook URL yet; set it in Server Settings or DEVICE_WEBHOOK_URL"})
 	}
 
-	// Live video (HLS): wire the media manager + the host the device dials back
-	// for media frames. Disabled unless MEDIA_ADVERTISE_HOST is set.
-	if cfg.VideoEnabled() {
-		a.mediaMgr = media.NewManager(cfg.HLSRoot, cfg.FFmpegPath, log)
-		a.deps.Media = a.mediaMgr
-		a.deps.MediaAdvertiseHost = net.JoinHostPort(cfg.MediaAdvertiseHost, strconv.Itoa(cfg.MediaPort))
-		a.deps.DeviceTZOffsetHours = cfg.DeviceTZOffsetHours
-		// Recorded clips need the DB to track metadata; only enable when present.
-		if a.store != nil {
-			a.clipReg = media.NewClipRegistry(a.mediaMgr, a.store, cfg.ClipsRoot, log)
-			a.deps.Clips = a.clipReg
-			log.Info(map[string]any{"event": "clips_enabled", "clips_root": cfg.ClipsRoot})
-		} else {
-			log.Info(map[string]any{"event": "clips_disabled", "detail": "no database"})
+	// Build a runtime per unit type.
+	for _, proto := range protos {
+		a.units = append(a.units, a.newUnitRuntime(proto, baseDeps))
+	}
+
+	// Back-compat: in single-unit mode the admin-editable device_port setting may
+	// override the resolved port. Ambiguous with several listeners, so multi-unit
+	// uses <UNIT>_PORT / DefaultDevicePort only.
+	if len(a.units) == 1 && a.store != nil {
+		u := a.units[0]
+		if p := a.resolveStoredDevicePort(u.port); p != u.port {
+			u.port = p
+			u.deps.Config.ListenPort = p
 		}
-		log.Info(map[string]any{"event": "video_enabled", "advertise": a.deps.MediaAdvertiseHost, "hls_root": cfg.HLSRoot})
-	} else {
-		log.Info(map[string]any{"event": "video_disabled", "detail": "MEDIA_ADVERTISE_HOST not set"})
 	}
 
 	return a
 }
 
-// Run starts the server and blocks until the process is signalled. It returns a
-// non-nil error only on a fatal listen failure.
-func (a *App) Run() error {
-	if a.store != nil {
-		defer a.store.Close()
+// newUnitRuntime resolves a unit's port, clones the base deps for it, and wires its
+// optional features (video, settings).
+func (a *App) newUnitRuntime(proto gateway.Protocol, baseDeps gateway.Deps) *unitRuntime {
+	u := &unitRuntime{proto: proto, name: proto.Name()}
+	u.port = a.resolveUnitPort(proto)
+
+	// Clone deps for this unit and set its listen port (Conn.Emit reports it).
+	u.deps = baseDeps
+	u.deps.Config = a.cfg
+	u.deps.Config.ListenPort = u.port
+
+	// Live video (HLS): only for a unit that runs a device-side media listener AND
+	// when video is enabled (a media advertise host is configured). Today only the
+	// howen unit qualifies; a GPS-only unit's deps.Media stays nil.
+	if _, ok := proto.(gateway.MediaServerProvider); ok && a.cfg.VideoEnabled() {
+		u.media = media.NewManager(a.cfg.HLSRoot, a.cfg.FFmpegPath, a.log)
+		u.deps.Media = u.media
+		u.deps.MediaAdvertiseHost = net.JoinHostPort(a.cfg.MediaAdvertiseHost, strconv.Itoa(a.cfg.MediaPort))
+		u.deps.DeviceTZOffsetHours = a.cfg.DeviceTZOffsetHours
+		if a.store != nil {
+			u.clips = media.NewClipRegistry(u.media, a.store, a.cfg.ClipsRoot, a.log)
+			u.deps.Clips = u.clips
+			a.log.Info(map[string]any{"event": "clips_enabled", "unit": u.name, "clips_root": a.cfg.ClipsRoot})
+		} else {
+			a.log.Info(map[string]any{"event": "clips_disabled", "unit": u.name, "detail": "no database"})
+		}
+		a.log.Info(map[string]any{"event": "video_enabled", "unit": u.name, "advertise": u.deps.MediaAdvertiseHost})
 	}
 
-	srv := gateway.New(a.proto, a.deps)
-	// A unit whose devices speak infrequently can widen the per-connection idle
-	// timeout beyond the framework default.
-	if it, ok := a.proto.(gateway.IdleTimeoutProvider); ok {
-		srv.SetIdleTimeout(it.IdleTimeout())
-		a.log.Info(map[string]any{"event": "idle_timeout_override", "timeout": it.IdleTimeout().String()})
+	// Editable mappings / per-model workflows.
+	if mp, ok := proto.(gateway.MappingProvider); ok {
+		u.mp = mp
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	// Persist system/server/gateway errors: tee every Error-level log line into the
-	// gateway_errors table (async, drop-on-full so logging never blocks on the DB).
-	if a.store != nil {
-		a.log.SetErrorSink(a.store.StartErrorLogSink(ctx, a.proto.Name(), a.log))
+	// Per-unit-type settings: build the holder and seed it from the schema defaults
+	// immediately so the unit works even with no database; stored values (if any)
+	// are loaded over the top at startup.
+	if cu, ok := proto.(gateway.ConfigurableUnit); ok {
+		u.cfgUnit = cu
+		u.settings = gateway.NewUnitSettings()
+		defaults := map[string]string{}
+		for _, f := range cu.SettingsSchema() {
+			defaults[f.Key] = f.Default
+		}
+		u.settings.Replace(defaults)
+		u.deps.UnitSettings = u.settings
 	}
 
-	if a.store != nil {
-		a.startStoreBackedServices(ctx)
-	}
+	u.caps = a.effectiveCapabilities(u)
+	return u
+}
 
-	// Management/control HTTP API (API-key protected).
-	if a.cfg.HTTPPort > 0 {
-		a.startHTTPAPI(ctx)
+// resolveUnitPort picks a unit's device TCP port: <UNITNAME>_PORT env →
+// DefaultDevicePort() → the generic LISTEN_PORT. In single-unit mode with a
+// database, the stored device_port server setting may further override it (the
+// admin-editable port, applied on restart) for backward compatibility.
+func (a *App) resolveUnitPort(proto gateway.Protocol) int {
+	port := a.cfg.ListenPort
+	if dp, ok := proto.(gateway.DefaultPort); ok {
+		port = dp.DefaultDevicePort()
 	}
-
-	// Media server: accepts the device's video connections (started by a stream
-	// command). Only runs when video is enabled and the unit provides a listener.
-	if a.mediaMgr != nil {
-		if msp, ok := a.proto.(gateway.MediaServerProvider); ok {
-			ms := msp.NewMediaServer(
-				net.JoinHostPort(a.cfg.ListenHost, strconv.Itoa(a.cfg.MediaPort)),
-				a.mediaMgr, a.clipReg, a.log)
-			go func() {
-				if err := ms.ListenAndServe(ctx); err != nil {
-					a.log.Error(map[string]any{"event": "media_fatal", "error": err.Error()})
-				}
-			}()
+	if v := strings.TrimSpace(os.Getenv(strings.ToUpper(proto.Name()) + "_PORT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 65535 {
+			port = n
+		} else {
+			a.log.Error(map[string]any{"event": "unit_port_invalid", "unit": proto.Name(), "value": v, "fallback": port})
 		}
 	}
-
-	a.log.Info(map[string]any{"event": "starting", "unit": a.proto.Name(), "device_auth_mode": a.authMode})
-	if err := srv.ListenAndServe(ctx); err != nil {
-		a.log.Error(map[string]any{"event": "fatal", "error": err.Error()})
-		return err
-	}
-	a.log.Info(map[string]any{"event": "stopped"})
-	return nil
+	return port
 }
 
-// startStoreBackedServices wires everything that needs the database: editable
-// mappings/workflows (with instant LISTEN/NOTIFY reload), the event-code picklist,
-// telemetry webhooks, and live server settings.
-func (a *App) startStoreBackedServices(ctx context.Context) {
-	// Front-end-editable event mappings + per-model workflows. Only when the unit
-	// drives its output from them (MappingProvider) — a plain GPS unit skips all
-	// of this. Edits apply instantly via LISTEN/NOTIFY; a periodic reload is a
-	// safety net in case a notification is ever missed.
-	if a.mp != nil {
-		a.seedAndLoadMappings(ctx)
-		a.seedEventCodes(ctx)
-		go a.store.ListenForMappingChanges(ctx, func(string) { a.reloadMappings(ctx) })
-		if a.cfg.MappingRefreshSeconds > 0 {
-			go a.refreshMappings(ctx, time.Duration(a.cfg.MappingRefreshSeconds)*time.Second)
-		}
-
-		a.loadWorkflows(ctx)
-		go a.store.ListenForWorkflowChanges(ctx, func(string) { a.loadWorkflows(ctx) })
-	}
-
-	// Telemetry webhooks: migrate the original single URL (env / legacy webhook_url
-	// setting) into the webhooks table on first run, load the enabled set into the
-	// sink, and reload instantly on any change.
-	a.seedWebhooks(ctx)
-	a.applyWebhooks(ctx)
-	go a.store.ListenForWebhookChanges(ctx, func(string) { a.applyWebhooks(ctx) })
-
-	// Record the port we actually bound so the panel can flag a pending restart
-	// when the configured device_port differs from the running one.
-	if err := a.store.SetSetting(ctx, postgres.SettingDevicePortActive, strconv.Itoa(a.cfg.ListenPort)); err != nil {
-		a.log.Debug(map[string]any{"event": "device_port_active_write_failed", "error": err.Error()})
-	}
-
-	// Live server settings: seed defaults from env on first run, apply the stored
-	// values, and reload instantly on any change (gateway name + device-auth gate).
-	if err := a.store.SeedSettingDefault(ctx, postgres.SettingGatewayName, a.cfg.Gateway); err != nil {
-		a.log.Error(map[string]any{"event": "gateway_name_seed_failed", "error": err.Error()})
-	}
-	if err := a.store.SeedSettingDefault(ctx, postgres.SettingDeviceRejectUnknown, strconv.FormatBool(a.cfg.DeviceRejectUnknown)); err != nil {
-		a.log.Error(map[string]any{"event": "reject_unknown_seed_failed", "error": err.Error()})
-	}
-	applyLiveSettings := func() {
-		a.applyGatewayName(ctx)
-		a.applyRejectUnknown(ctx)
-	}
-	applyLiveSettings()
-	go a.store.ListenForSettingsChanges(ctx, func(string) { applyLiveSettings() })
-}
-
-// startHTTPAPI builds and runs the management/control HTTP API.
-func (a *App) startHTTPAPI(ctx context.Context) {
-	var verifier httpapi.KeyVerifier
-	var data httpapi.DataStore
-	if a.store != nil {
-		verifier = a.store
-		data = a.store
-	}
-	api := httpapi.New(a.cfg.ListenHost, a.cfg.HTTPPort, a.proto.Name(), verifier, data, a.hub, a.log)
-	api.SetInternalToken(a.cfg.InternalAPIToken)
-	if a.cfg.InternalAPIToken != "" {
-		a.log.Info(map[string]any{"event": "internal_token_enabled"})
-	}
-	if a.mediaMgr != nil {
-		api.SetHLSRoot(a.cfg.HLSRoot)
-	}
-	if a.clipReg != nil {
-		api.SetClipsRoot(a.cfg.ClipsRoot)
-	}
-	api.SetCapabilities(a.effectiveCapabilities())
-	go func() {
-		if err := api.Run(ctx); err != nil {
-			a.log.Error(map[string]any{"event": "http_fatal", "error": err.Error()})
-		}
-	}()
-}
-
-// effectiveCapabilities is what this running gateway actually offers: the unit's
-// declared capabilities gated by runtime configuration.
-func (a *App) effectiveCapabilities() gateway.EffectiveCapabilities {
-	caps := a.proto.Capabilities()
-	return gateway.EffectiveCapabilities{
-		HasVideo:    caps.HasVideo && a.cfg.VideoEnabled(),
-		HasCommands: caps.HasCommands,
-		HasConfig:   caps.HasConfig,
-		HasStatus:   caps.HasStatus,
-		HasClips:    a.mediaMgr != nil && a.clipReg != nil,
-		HasMappings: a.mp != nil,
-	}
-}
-
-// seedAndLoadMappings seeds the unit's built-in mapping defaults into the database
-// (no-op for rows that already exist) and applies the current set to the live maps.
-func (a *App) seedAndLoadMappings(ctx context.Context) {
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	if err := a.store.SeedEventMappings(cctx, a.proto.Name(), a.mp.DefaultMappingEntries()); err != nil {
-		a.log.Error(map[string]any{"event": "mapping_seed_failed", "error": err.Error()})
-	}
-	loaded, err := a.store.LoadEventMappings(cctx, a.proto.Name())
-	if err != nil {
-		a.log.Error(map[string]any{"event": "mapping_load_failed", "error": err.Error(), "detail": "using built-in defaults"})
-		return
-	}
-	a.mp.ApplyMappings(loaded)
-	a.log.Info(map[string]any{"event": "mappings_loaded", "map_types": len(loaded)})
-}
-
-// seedEventCodes loads the embedded ACM Standard Event Codes into the database so
-// the front end can offer them as a picklist. Idempotent (upsert).
-func (a *App) seedEventCodes(ctx context.Context) {
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	codes := eventcodes.Standard()
-	if err := a.store.SeedStandardEventCodes(cctx, codes); err != nil {
-		a.log.Error(map[string]any{"event": "event_codes_seed_failed", "error": err.Error()})
-		return
-	}
-	a.log.Info(map[string]any{"event": "event_codes_seeded", "count": len(codes)})
-}
-
-// reloadMappings loads the current mappings and applies them to the live maps.
-// Used by both the LISTEN/NOTIFY handler and the periodic safety-net.
-func (a *App) reloadMappings(ctx context.Context) {
-	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	loaded, err := a.store.LoadEventMappings(cctx, a.proto.Name())
-	if err != nil {
-		a.log.Debug(map[string]any{"event": "mapping_reload_failed", "error": err.Error()})
-		return
-	}
-	a.mp.ApplyMappings(loaded)
-	a.log.Debug(map[string]any{"event": "mappings_reloaded", "map_types": len(loaded)})
-}
-
-// loadWorkflows loads the active per-model mapping workflows and installs them.
-// Called at startup and on every LISTEN/NOTIFY change so edits apply instantly.
-func (a *App) loadWorkflows(ctx context.Context) {
-	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	wf, err := a.store.LoadActiveWorkflows(cctx, a.proto.Name())
-	if err != nil {
-		a.log.Debug(map[string]any{"event": "workflow_load_failed", "error": err.Error()})
-		return
-	}
-	a.mp.ApplyWorkflows(wf)
-	a.log.Info(map[string]any{"event": "workflows_loaded", "models": a.mp.WorkflowModelCount()})
-}
-
-// refreshMappings periodically reloads mappings as a safety net behind
-// LISTEN/NOTIFY (covers a missed notification on a dropped connection).
-func (a *App) refreshMappings(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			a.reloadMappings(ctx)
-		}
-	}
-}
-
-// resolveDevicePort returns the device TCP port to bind: the stored device_port
-// server setting when set and valid, else the env/default port. The setting is
-// seeded from the env value on first run. Applied at startup only.
-func (a *App) resolveDevicePort(envPort int) int {
+// resolveStoredDevicePort honors the admin-editable device_port setting, but only
+// in single-unit mode (the setting is single-valued and would be ambiguous across
+// several listeners). Applied at startup; an invalid value falls back to envPort.
+func (a *App) resolveStoredDevicePort(envPort int) int {
 	cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = a.store.SeedSettingDefault(cctx, postgres.SettingDevicePort, strconv.Itoa(envPort))
@@ -393,9 +248,330 @@ func (a *App) resolveDevicePort(envPort int) int {
 	return p
 }
 
+// Run starts every unit's listener and blocks until the process is signalled. It
+// returns a non-nil error only on a fatal listen failure (e.g. a port already in
+// use), which also shuts the other listeners down.
+func (a *App) Run() error {
+	if a.store != nil {
+		defer a.store.Close()
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Persist system/server/gateway errors: tee every Error-level log line into the
+	// gateway_errors table (async, drop-on-full so logging never blocks on the DB).
+	if a.store != nil {
+		a.log.SetErrorSink(a.store.StartErrorLogSink(ctx, "gateway", a.log))
+		a.startStoreBackedServices(ctx)
+	}
+
+	// Management/control HTTP API (API-key protected).
+	if a.cfg.HTTPPort > 0 {
+		a.startHTTPAPI(ctx)
+	}
+
+	// Media servers: accept the device's video connections (one per video unit).
+	for _, u := range a.units {
+		if u.media == nil {
+			continue
+		}
+		msp, ok := u.proto.(gateway.MediaServerProvider)
+		if !ok {
+			continue
+		}
+		ms := msp.NewMediaServer(net.JoinHostPort(a.cfg.ListenHost, strconv.Itoa(a.cfg.MediaPort)), u.media, u.clips, a.log)
+		go func(ms gateway.MediaListener, name string) {
+			if err := ms.ListenAndServe(ctx); err != nil {
+				a.log.Error(map[string]any{"event": "media_fatal", "unit": name, "error": err.Error()})
+			}
+		}(ms, u.name)
+	}
+
+	a.log.Info(map[string]any{"event": "starting", "units": a.unitNames(), "device_auth_mode": a.authMode})
+
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		fatal error
+	)
+	for _, u := range a.units {
+		srv := gateway.New(u.proto, u.deps)
+		if it, ok := u.proto.(gateway.IdleTimeoutProvider); ok {
+			srv.SetIdleTimeout(it.IdleTimeout())
+		}
+		wg.Add(1)
+		go func(u *unitRuntime, srv *gateway.Server) {
+			defer wg.Done()
+			if err := srv.ListenAndServe(ctx); err != nil {
+				a.log.Error(map[string]any{"event": "fatal", "unit": u.name, "error": err.Error()})
+				mu.Lock()
+				if fatal == nil {
+					fatal = err
+				}
+				mu.Unlock()
+				stop() // a bind failure brings the whole process down loudly
+			}
+		}(u, srv)
+	}
+	wg.Wait()
+
+	if fatal != nil {
+		return fatal
+	}
+	a.log.Info(map[string]any{"event": "stopped"})
+	return nil
+}
+
+func (a *App) unitNames() []string {
+	names := make([]string, len(a.units))
+	for i, u := range a.units {
+		names[i] = u.name
+	}
+	return names
+}
+
+// anyMappings reports whether any hosted unit drives its output from editable
+// mappings (so the shared event-code picklist is worth seeding).
+func (a *App) anyMappings() bool {
+	for _, u := range a.units {
+		if u.mp != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// anyMedia reports whether any hosted unit serves video (so the HTTP API should
+// expose the HLS/clips roots).
+func (a *App) anyMedia() *unitRuntime {
+	for _, u := range a.units {
+		if u.media != nil {
+			return u
+		}
+	}
+	return nil
+}
+
+// startStoreBackedServices wires everything that needs the database: per-unit
+// editable mappings/workflows + unit settings (each with instant LISTEN/NOTIFY
+// reload), and the global event-code picklist, telemetry webhooks, and live server
+// settings.
+func (a *App) startStoreBackedServices(ctx context.Context) {
+	// Per-unit services.
+	for _, u := range a.units {
+		u := u
+		if u.mp != nil {
+			a.seedAndLoadMappings(ctx, u)
+			go a.store.ListenForMappingChanges(ctx, func(changed string) {
+				if changed == "" || changed == u.name {
+					a.reloadMappings(ctx, u)
+				}
+			})
+			if a.cfg.MappingRefreshSeconds > 0 {
+				go a.refreshMappings(ctx, u, time.Duration(a.cfg.MappingRefreshSeconds)*time.Second)
+			}
+			a.loadWorkflows(ctx, u)
+			go a.store.ListenForWorkflowChanges(ctx, func(changed string) {
+				if changed == "" || changed == u.name {
+					a.loadWorkflows(ctx, u)
+				}
+			})
+		}
+		if u.cfgUnit != nil {
+			a.seedAndLoadUnitSettings(ctx, u)
+			go a.store.ListenForUnitSettingsChanges(ctx, func(changed string) {
+				if changed == "" || changed == u.name {
+					a.loadUnitSettings(ctx, u)
+				}
+			})
+		}
+	}
+
+	// Global, once: the ACM Standard Event Codes picklist (only when some unit has
+	// editable mappings).
+	if a.anyMappings() {
+		a.seedEventCodes(ctx)
+	}
+
+	// Telemetry webhooks: migrate the legacy single URL into the webhooks table on
+	// first run, load the enabled set into the sink, reload instantly on change.
+	a.seedWebhooks(ctx)
+	a.applyWebhooks(ctx)
+	go a.store.ListenForWebhookChanges(ctx, func(string) { a.applyWebhooks(ctx) })
+
+	// Record the bound port(s) so the panel can flag a pending restart when the
+	// configured port differs from the running one. Single-valued setting, so only
+	// meaningful in single-unit mode.
+	if len(a.units) == 1 {
+		if err := a.store.SetSetting(ctx, postgres.SettingDevicePortActive, strconv.Itoa(a.units[0].port)); err != nil {
+			a.log.Debug(map[string]any{"event": "device_port_active_write_failed", "error": err.Error()})
+		}
+	}
+
+	// Live server settings: seed defaults from env on first run, apply the stored
+	// values, and reload instantly on any change (gateway name + device-auth gate).
+	if err := a.store.SeedSettingDefault(ctx, postgres.SettingGatewayName, a.cfg.Gateway); err != nil {
+		a.log.Error(map[string]any{"event": "gateway_name_seed_failed", "error": err.Error()})
+	}
+	if err := a.store.SeedSettingDefault(ctx, postgres.SettingDeviceRejectUnknown, strconv.FormatBool(a.cfg.DeviceRejectUnknown)); err != nil {
+		a.log.Error(map[string]any{"event": "reject_unknown_seed_failed", "error": err.Error()})
+	}
+	applyLiveSettings := func() {
+		a.applyGatewayName(ctx)
+		a.applyRejectUnknown(ctx)
+	}
+	applyLiveSettings()
+	go a.store.ListenForSettingsChanges(ctx, func(string) { applyLiveSettings() })
+}
+
+// startHTTPAPI builds and runs the management/control HTTP API for every unit.
+func (a *App) startHTTPAPI(ctx context.Context) {
+	var verifier httpapi.KeyVerifier
+	var data httpapi.DataStore
+	if a.store != nil {
+		verifier = a.store
+		data = a.store
+	}
+	units := make([]httpapi.UnitInfo, len(a.units))
+	for i, u := range a.units {
+		ui := httpapi.UnitInfo{Name: u.name, Caps: u.caps}
+		if u.cfgUnit != nil {
+			ui.Schema = u.cfgUnit.SettingsSchema()
+		}
+		units[i] = ui
+	}
+	api := httpapi.New(a.cfg.ListenHost, a.cfg.HTTPPort, units, verifier, data, a.hub, a.log)
+	api.SetInternalToken(a.cfg.InternalAPIToken)
+	if a.cfg.InternalAPIToken != "" {
+		a.log.Info(map[string]any{"event": "internal_token_enabled"})
+	}
+	if vu := a.anyMedia(); vu != nil {
+		api.SetHLSRoot(a.cfg.HLSRoot)
+		if vu.clips != nil {
+			api.SetClipsRoot(a.cfg.ClipsRoot)
+		}
+	}
+	go func() {
+		if err := api.Run(ctx); err != nil {
+			a.log.Error(map[string]any{"event": "http_fatal", "error": err.Error()})
+		}
+	}()
+}
+
+// effectiveCapabilities is what the running gateway actually offers for one unit:
+// the unit's declared capabilities gated by runtime configuration.
+func (a *App) effectiveCapabilities(u *unitRuntime) gateway.EffectiveCapabilities {
+	caps := u.proto.Capabilities()
+	return gateway.EffectiveCapabilities{
+		HasVideo:    caps.HasVideo && a.cfg.VideoEnabled(),
+		HasCommands: caps.HasCommands,
+		HasConfig:   caps.HasConfig,
+		HasStatus:   caps.HasStatus,
+		HasClips:    u.media != nil && u.clips != nil,
+		HasMappings: u.mp != nil,
+	}
+}
+
+// seedAndLoadMappings seeds a unit's built-in mapping defaults into the database
+// (no-op for existing rows) and applies the current set to the unit's live maps.
+func (a *App) seedAndLoadMappings(ctx context.Context, u *unitRuntime) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := a.store.SeedEventMappings(cctx, u.name, u.mp.DefaultMappingEntries()); err != nil {
+		a.log.Error(map[string]any{"event": "mapping_seed_failed", "unit": u.name, "error": err.Error()})
+	}
+	loaded, err := a.store.LoadEventMappings(cctx, u.name)
+	if err != nil {
+		a.log.Error(map[string]any{"event": "mapping_load_failed", "unit": u.name, "error": err.Error(), "detail": "using built-in defaults"})
+		return
+	}
+	u.mp.ApplyMappings(loaded)
+	a.log.Info(map[string]any{"event": "mappings_loaded", "unit": u.name, "map_types": len(loaded)})
+}
+
+// seedEventCodes loads the embedded ACM Standard Event Codes into the database so
+// the front end can offer them as a picklist. Idempotent (upsert). Global.
+func (a *App) seedEventCodes(ctx context.Context) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	codes := eventcodes.Standard()
+	if err := a.store.SeedStandardEventCodes(cctx, codes); err != nil {
+		a.log.Error(map[string]any{"event": "event_codes_seed_failed", "error": err.Error()})
+		return
+	}
+	a.log.Info(map[string]any{"event": "event_codes_seeded", "count": len(codes)})
+}
+
+// reloadMappings loads a unit's current mappings and applies them to its live maps.
+func (a *App) reloadMappings(ctx context.Context, u *unitRuntime) {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	loaded, err := a.store.LoadEventMappings(cctx, u.name)
+	if err != nil {
+		a.log.Debug(map[string]any{"event": "mapping_reload_failed", "unit": u.name, "error": err.Error()})
+		return
+	}
+	u.mp.ApplyMappings(loaded)
+	a.log.Debug(map[string]any{"event": "mappings_reloaded", "unit": u.name, "map_types": len(loaded)})
+}
+
+// loadWorkflows loads a unit's active per-model workflows and installs them.
+func (a *App) loadWorkflows(ctx context.Context, u *unitRuntime) {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	wf, err := a.store.LoadActiveWorkflows(cctx, u.name)
+	if err != nil {
+		a.log.Debug(map[string]any{"event": "workflow_load_failed", "unit": u.name, "error": err.Error()})
+		return
+	}
+	u.mp.ApplyWorkflows(wf)
+	a.log.Info(map[string]any{"event": "workflows_loaded", "unit": u.name, "models": u.mp.WorkflowModelCount()})
+}
+
+// refreshMappings periodically reloads a unit's mappings as a safety net behind
+// LISTEN/NOTIFY (covers a missed notification on a dropped connection).
+func (a *App) refreshMappings(ctx context.Context, u *unitRuntime, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.reloadMappings(ctx, u)
+		}
+	}
+}
+
+// seedAndLoadUnitSettings seeds a unit's schema defaults into the database (no-op
+// for existing rows) and loads the stored values into the unit's settings holder.
+func (a *App) seedAndLoadUnitSettings(ctx context.Context, u *unitRuntime) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	for _, f := range u.cfgUnit.SettingsSchema() {
+		if err := a.store.SeedUnitSettingDefault(cctx, u.name, f.Key, f.Default); err != nil {
+			a.log.Error(map[string]any{"event": "unit_setting_seed_failed", "unit": u.name, "key": f.Key, "error": err.Error()})
+		}
+	}
+	a.loadUnitSettings(ctx, u)
+}
+
+// loadUnitSettings loads a unit's stored settings and hot-swaps them into its holder.
+func (a *App) loadUnitSettings(ctx context.Context, u *unitRuntime) {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	m, err := a.store.LoadUnitSettings(cctx, u.name)
+	if err != nil {
+		a.log.Debug(map[string]any{"event": "unit_settings_load_failed", "unit": u.name, "error": err.Error()})
+		return
+	}
+	u.settings.Replace(m)
+	a.log.Debug(map[string]any{"event": "unit_settings_loaded", "unit": u.name, "keys": len(m)})
+}
+
 // applyGatewayName loads the stored gateway identifier and installs it on the
-// message builder so every universal message carries it. Called at startup and on
-// every settings change.
+// message builder so every universal message carries it.
 func (a *App) applyGatewayName(ctx context.Context) {
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -411,8 +587,7 @@ func (a *App) applyGatewayName(ctx context.Context) {
 }
 
 // applyRejectUnknown loads the device-authorization gate and installs it on the
-// store so it takes effect for subsequent device connections. Called at startup
-// and on every settings change.
+// store so it takes effect for subsequent device connections.
 func (a *App) applyRejectUnknown(ctx context.Context) {
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -429,8 +604,8 @@ func (a *App) applyRejectUnknown(ctx context.Context) {
 }
 
 // seedWebhooks migrates the original single webhook URL into the webhooks table on
-// first run. It prefers a value previously set via the (now legacy) webhook_url
-// server setting, falling back to DEVICE_WEBHOOK_URL. No-op once any webhook exists.
+// first run, preferring a value previously set via the legacy webhook_url setting,
+// falling back to DEVICE_WEBHOOK_URL. No-op once any webhook exists.
 func (a *App) seedWebhooks(ctx context.Context) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -449,7 +624,7 @@ func (a *App) seedWebhooks(ctx context.Context) {
 }
 
 // applyWebhooks loads the enabled webhook URLs and installs them as the sink's
-// targets. Called at startup and on every webhooks change.
+// targets.
 func (a *App) applyWebhooks(ctx context.Context) {
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

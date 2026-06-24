@@ -22,8 +22,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/dfm/device-gateway/internal/core/mapping"
 )
 
 // GT06 protocol (message type) numbers.
@@ -214,9 +218,15 @@ func decodeStatusInfo(content []byte, off int) *statusInfo {
 	return si
 }
 
-// alarmEventCodes maps the alarm/language former byte to an ACM-style event code.
-// These are provisional and should be confirmed against the ACM Standard Event
-// Code table once a real device alarm sample is available.
+// mapTypeAlarm is the editable mapping group key for the alarm/language former
+// byte → event-code table.
+const mapTypeAlarm = "alarm_former"
+
+// alarmEventCodes is the BUILT-IN DEFAULT alarm/language former byte → ACM-style
+// event code map. These are provisional and should be confirmed against the ACM
+// Standard Event Code table once a real device alarm sample is available. At
+// runtime they can be overridden from the database (ApplyMappings) so a front end
+// can edit them without a redeploy; the defaults remain the fallback.
 var alarmEventCodes = map[int]string{
 	0x01: "PANIC",           // SOS
 	0x02: "POWER:CUT",       // power cut
@@ -225,11 +235,59 @@ var alarmEventCodes = map[int]string{
 	0x05: "GEOFENCE:EXIT",   // fence out
 }
 
+// currentAlarmCodes is the active set, swapped atomically by ApplyMappings.
+var currentAlarmCodes atomic.Pointer[map[int]string]
+
+func init() { currentAlarmCodes.Store(cloneIntStr(alarmEventCodes)) }
+
+func activeAlarmCodes() map[int]string {
+	if p := currentAlarmCodes.Load(); p != nil {
+		return *p
+	}
+	return alarmEventCodes
+}
+
+func cloneIntStr(m map[int]string) *map[int]string {
+	cp := make(map[int]string, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return &cp
+}
+
+// DefaultMappingEntries flattens the built-in alarm map for seeding the database,
+// in stable code order. Implements part of gateway.MappingProvider.
+func DefaultMappingEntries() []mapping.Entry {
+	codes := make([]int, 0, len(alarmEventCodes))
+	for c := range alarmEventCodes {
+		codes = append(codes, c)
+	}
+	sort.Ints(codes)
+	entries := make([]mapping.Entry, 0, len(codes))
+	for _, c := range codes {
+		entries = append(entries, mapping.Entry{MapType: mapTypeAlarm, Code: c, EventCode: alarmEventCodes[c]})
+	}
+	return entries
+}
+
+// ApplyMappings installs the loaded alarm map as the active set, keeping the
+// built-in default when the loaded table lacks (or empties) the alarm map type.
+// Pass nil to reset to the built-in default.
+func ApplyMappings(loaded mapping.Table) {
+	chosen := alarmEventCodes
+	if loaded != nil {
+		if m, ok := loaded[mapTypeAlarm]; ok && len(m) > 0 {
+			chosen = m
+		}
+	}
+	currentAlarmCodes.Store(cloneIntStr(chosen))
+}
+
 // eventsFromAlarm derives event codes from an alarm packet's former byte and
 // status block.
 func eventsFromAlarm(alarmFormer int, si *statusInfo) []string {
 	var events []string
-	if mapped, ok := alarmEventCodes[alarmFormer]; ok {
+	if mapped, ok := activeAlarmCodes()[alarmFormer]; ok {
 		events = append(events, mapped)
 	}
 	// Low battery is signalled via terminal-info alarm bits (011) rather than the

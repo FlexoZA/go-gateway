@@ -22,7 +22,7 @@ func (s stubVerifier) VerifyAPIKey(_ context.Context, key string) (bool, error) 
 }
 
 func newTestServer(v KeyVerifier) *Server {
-	return New("127.0.0.1", 0, "test", v, nil, nil, logging.New("test"))
+	return New("127.0.0.1", 0, []UnitInfo{{Name: "test"}}, v, nil, nil, logging.New("test"))
 }
 
 func TestHealthIsPublic(t *testing.T) {

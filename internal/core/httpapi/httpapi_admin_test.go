@@ -85,6 +85,10 @@ func (f *fakeData) ListStandardEventCodes(context.Context) ([]map[string]any, er
 func (f *fakeData) ListSettings(context.Context) ([]map[string]any, error) {
 	return []map[string]any{{"key": "webhook_url", "value": f.webhookURL}}, nil
 }
+func (f *fakeData) ListUnitSettings(context.Context, string) ([]map[string]any, error) {
+	return []map[string]any{}, nil
+}
+func (f *fakeData) SetUnitSetting(context.Context, string, string, string) error { return nil }
 func (f *fakeData) SetSetting(_ context.Context, key, value string) error {
 	if key == "webhook_url" {
 		f.webhookURL = value
@@ -177,7 +181,7 @@ const (
 )
 
 func newAdminServer(f *fakeData) *Server {
-	return New("127.0.0.1", 0, "howen", stubVerifier{valid: "k"}, f, nil, logging.New("test"))
+	return New("127.0.0.1", 0, []UnitInfo{{Name: "howen"}}, stubVerifier{valid: "k"}, f, nil, logging.New("test"))
 }
 
 func do(s *Server, method, target, body string) *httptest.ResponseRecorder {
@@ -418,7 +422,7 @@ func TestSetupEndpoints(t *testing.T) {
 }
 
 func TestInternalToken(t *testing.T) {
-	s := New("127.0.0.1", 0, "howen", stubVerifier{valid: "dbkey"}, &fakeData{}, nil, logging.New("test"))
+	s := New("127.0.0.1", 0, []UnitInfo{{Name: "howen"}}, stubVerifier{valid: "dbkey"}, &fakeData{}, nil, logging.New("test"))
 	s.SetInternalToken("internal-secret")
 	// internal token works
 	req := httptest.NewRequest("GET", "/api/ping", nil)
@@ -447,7 +451,7 @@ func TestInternalToken(t *testing.T) {
 }
 
 func TestDataEndpointsNoStore(t *testing.T) {
-	s := New("127.0.0.1", 0, "howen", stubVerifier{valid: "k"}, nil, nil, logging.New("test"))
+	s := New("127.0.0.1", 0, []UnitInfo{{Name: "howen"}}, stubVerifier{valid: "k"}, nil, nil, logging.New("test"))
 	if rec := do(s, "GET", "/api/devices", ""); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no-store devices = %d, want 503", rec.Code)
 	}

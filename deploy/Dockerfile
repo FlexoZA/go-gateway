@@ -1,11 +1,12 @@
-# Generic gateway image. One image = one unit type, selected at build time via
-# the UNIT build arg (which cmd/<UNIT> to compile). The same Dockerfile builds
-# every unit-type server.
+# Gateway image. Builds cmd/<UNIT>, selected at build time via the UNIT build arg.
+# The default `gateway` binary is the MULTI-UNIT server (one process hosting every
+# registered unit type — see cmd/gateway). The same Dockerfile can still build a
+# single-unit binary (e.g. --build-arg UNIT=howen) if ever needed.
 #
-#   docker build -f deploy/Dockerfile --build-arg UNIT=howen -t device-gateway-howen .
+#   docker build -f deploy/Dockerfile -t device-gateway .                 # multi-unit
+#   docker build -f deploy/Dockerfile --build-arg UNIT=howen -t ... .     # single unit
 #
-# GPS-only unit types produce a static binary and run on distroless. Unit types
-# that need video (ffmpeg) should override the runtime stage base image.
+# ffmpeg is bundled for video-capable units (e.g. howen); GPS-only units ignore it.
 ARG GO_VERSION=1.23
 
 FROM golang:${GO_VERSION}-bookworm AS build
@@ -14,7 +15,7 @@ WORKDIR /src
 COPY go.mod ./
 RUN go mod download
 COPY . .
-ARG UNIT=howen
+ARG UNIT=gateway
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gateway ./cmd/${UNIT}
 # Seed an empty clips dir so the named volume mounted here inherits nonroot
 # ownership (distroless has no shell to mkdir/chown at runtime).
@@ -32,8 +33,9 @@ COPY --from=build /out/gateway /gateway
 COPY --from=build --chown=nonroot:nonroot /out/clips /var/lib/gateway/clips
 ENV FFMPEG_PATH=/usr/local/bin/ffmpeg
 ENV CLIPS_ROOT=/var/lib/gateway/clips
-# Documentation only; ports are set via env and mapped in compose.
-# 33000 control · 33001 media · 8080 HTTP API
-EXPOSE 33000 33001 8080
+# Documentation only; ports are set via env and mapped in compose. The multi-unit
+# gateway listens per unit: 33000 howen control · 33001 howen media · 8050 fleetiger
+# · 8080 HTTP API.
+EXPOSE 8050 33000 33001 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/gateway"]

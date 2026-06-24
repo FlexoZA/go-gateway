@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useFetch } from "@/lib/useFetch";
-import { useGatewayInfo } from "@/lib/useGatewayInfo";
+import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
+import { deviceConfigSchema } from "@/lib/deviceConfig";
 import { Badge, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 import { DeviceConfig } from "@/components/DeviceConfig";
 
@@ -31,8 +32,12 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
   const online = !!conn;
   const state = conn?.state === "sleep" ? "standby" : online ? "online" : reg?.status || "offline";
   const [tab, setTab] = useState<"status" | "config">("status");
-  // The Config tab only exists when the gateway's unit supports parameter config.
-  const hasConfig = useGatewayInfo()?.capabilities?.has_config !== false;
+  // The Config tab only exists when THIS device's unit type supports parameter
+  // config AND the admin has a config schema for it (different units have different
+  // config screens; a GPS-only unit has none).
+  const info = useGatewayInfo();
+  const unitType = conn?.protocol || reg?.protocol;
+  const hasConfig = !!capsForUnit(info, unitType)?.has_config && !!deviceConfigSchema(unitType);
   const tabs: ("status" | "config")[] = hasConfig ? ["status", "config"] : ["status"];
 
   return (
@@ -74,7 +79,7 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
 
       {hasConfig && tab === "config" ? (
         online ? (
-          <DeviceConfig serial={serial} />
+          <DeviceConfig serial={serial} unit={unitType!} />
         ) : (
           <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
             The device must be connected to read or edit its configuration.

@@ -138,6 +138,37 @@ type IdleTimeoutProvider interface {
 	IdleTimeout() time.Duration
 }
 
+// DefaultPort lets a unit declare the device TCP port it binds when no per-unit
+// port override is set. The app runner resolves a unit's port as <UNIT>_PORT env →
+// DefaultDevicePort() → the generic LISTEN_PORT. Detected via type assertion; a
+// unit that doesn't implement it falls back to LISTEN_PORT. This is what lets one
+// process host several units, each on its own port.
+type DefaultPort interface {
+	DefaultDevicePort() int
+}
+
+// SettingField describes one editable gateway-side, unit-type-level setting (e.g.
+// a GPS tracker's timezone offset) — distinct from per-device parameter config.
+// A unit declares its fields via ConfigurableUnit; the admin renders them as that
+// unit's settings screen; values are stored per unit, hot-reloaded, and read by
+// the running session through Deps.UnitSettings.
+type SettingField struct {
+	Key     string   `json:"key"`
+	Label   string   `json:"label"`
+	Type    string   `json:"type"` // "string" | "number" | "bool" | "select"
+	Default string   `json:"default"`
+	Options []string `json:"options,omitempty"` // for "select"
+	Help    string   `json:"help,omitempty"`
+	Group   string   `json:"group,omitempty"`
+}
+
+// ConfigurableUnit is implemented by a unit that exposes editable gateway-side
+// settings. Detected by the app runner via type assertion; a unit that doesn't
+// implement it has no settings screen.
+type ConfigurableUnit interface {
+	SettingsSchema() []SettingField
+}
+
 // Frame is one decoded protocol message.
 type Frame struct {
 	Type    int
@@ -208,6 +239,11 @@ type Deps struct {
 	// DeviceTZOffsetHours localizes clip playback windows to the device's local
 	// clock (Howen indexes recordings by local wall-clock). 0 = UTC.
 	DeviceTZOffsetHours float64
+
+	// UnitSettings holds this unit's editable gateway-side settings (see
+	// ConfigurableUnit). Per-unit; nil when the unit declares no settings. A
+	// session must nil-check before reading. Hot-swapped on admin edits.
+	UnitSettings *UnitSettings
 }
 
 // Conn wraps a device socket with framework dependencies.

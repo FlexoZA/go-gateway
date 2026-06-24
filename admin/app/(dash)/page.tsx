@@ -45,6 +45,7 @@ export default function DashboardPage() {
             <thead>
               <tr>
                 <th className="th">Serial</th>
+                <th className="th">Type</th>
                 <th className="th">Model</th>
                 <th className="th">State</th>
                 <th className="th">Remote</th>
@@ -61,6 +62,7 @@ export default function DashboardPage() {
                       {u.serial}
                     </Link>
                   </td>
+                  <td className="td"><Badge tone="indigo">{u.protocol}</Badge></td>
                   <td className="td">{u.model || "—"}</td>
                   <td className="td">
                     {u.state === "sleep" ? <Badge tone="amber">standby</Badge> : <Badge tone="green">online</Badge>}

@@ -16,8 +16,14 @@ import (
 	"time"
 
 	"github.com/dfm/device-gateway/internal/core/device"
+	"github.com/dfm/device-gateway/internal/core/flow"
 	"github.com/dfm/device-gateway/internal/core/gateway"
+	"github.com/dfm/device-gateway/internal/core/mapping"
 )
+
+// settingTimezoneOffset is the unit-settings key for the device's local-clock
+// offset from UTC (GT06 sends wall-clock with no timezone).
+const settingTimezoneOffset = "timezone_offset_hours"
 
 const (
 	unitName    = "fleetiger"
@@ -49,6 +55,32 @@ func (*Protocol) Capabilities() gateway.Capabilities { return gateway.Capabiliti
 // IdleTimeout overrides the framework default to accommodate the device's slow
 // (~3 minute) heartbeat cadence. Detected by the app runner via type assertion.
 func (*Protocol) IdleTimeout() time.Duration { return idleTimeout }
+
+// DefaultDevicePort is the port FleeTiger devices dial when no <UNIT>_PORT
+// override is set. Lets one gateway process host this unit alongside others.
+func (*Protocol) DefaultDevicePort() int { return 8050 }
+
+// SettingsSchema declares the unit's editable gateway-side settings (rendered as
+// FleeTiger's settings screen). Implements gateway.ConfigurableUnit.
+func (*Protocol) SettingsSchema() []gateway.SettingField {
+	return []gateway.SettingField{{
+		Key:     settingTimezoneOffset,
+		Label:   "Device timezone offset (hours)",
+		Type:    "number",
+		Default: "0",
+		Help:    "GT06 sends local wall-clock with no timezone. Set e.g. 2 for SAST, or 0 if the unit already sends UTC.",
+		Group:   "Time",
+	}}
+}
+
+// MappingProvider: the provisional alarm/language code → event mapping is editable
+// from the admin (map type "alarm_former"). These thin methods let the app runner
+// seed and apply mappings without importing this package; they delegate to the
+// package-level mapping state. FleeTiger has no per-model workflows.
+func (*Protocol) DefaultMappingEntries() []mapping.Entry  { return DefaultMappingEntries() }
+func (*Protocol) ApplyMappings(t mapping.Table)           { ApplyMappings(t) }
+func (*Protocol) ApplyWorkflows(_ map[string]*flow.Graph) {}
+func (*Protocol) WorkflowModelCount() int                 { return 0 }
 
 // ReadFrame decodes exactly one GT06 frame from the stream. It first resyncs to
 // the 0x78 0x78 start marker (discarding any inter-frame noise), reads the length
@@ -122,7 +154,14 @@ type session struct {
 func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 	log := s.conn.Deps.Log.With("tcp/fleetiger")
 
-	parsed, err := parseGt06Packet(f.Payload, s.conn.Deps.Config.DeviceTZOffsetHours)
+	// The device's local-clock offset comes from the editable unit settings, with
+	// the env-configured DeviceTZOffsetHours as the fallback (and for tests, which
+	// build Deps without a settings holder).
+	tz := s.conn.Deps.Config.DeviceTZOffsetHours
+	if us := s.conn.Deps.UnitSettings; us != nil {
+		tz = us.Float(settingTimezoneOffset, tz)
+	}
+	parsed, err := parseGt06Packet(f.Payload, tz)
 	if err != nil {
 		log.Debug(map[string]any{"event": "packet_parse_error", "remote": s.conn.RemoteAddr().String(), "error": err.Error()})
 		return nil // drop the packet, keep the connection

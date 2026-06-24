@@ -137,9 +137,8 @@ const STARTER = {
   edges: [],
 };
 
-export default function WorkflowEditor() {
-  const list = useFetch<{ unit: string; workflows: WorkflowSummary[] }>("workflows");
-  const unit = list.data?.unit ?? "howen";
+export default function WorkflowEditor({ unit }: { unit: string }) {
+  const list = useFetch<{ unit: string; workflows: WorkflowSummary[] }>(`workflows?unit=${encodeURIComponent(unit)}`);
 
   const [model, setModel] = useState("");
   const [name, setName] = useState("");
@@ -216,7 +215,7 @@ export default function WorkflowEditor() {
     setStatus(null);
     setModel(m);
     try {
-      const wf = await api<any>(`workflows/${encodeURIComponent(m)}`);
+      const wf = await api<any>(`workflows/${encodeURIComponent(m)}?unit=${encodeURIComponent(unit)}`);
       setName(wf.name || "");
       setIsActive(!!wf.is_active);
       const g = fromGraph(wf.graph);
@@ -247,7 +246,7 @@ export default function WorkflowEditor() {
       return;
     }
     try {
-      await api(`workflows/${encodeURIComponent(model.trim())}`, {
+      await api(`workflows/${encodeURIComponent(model.trim())}?unit=${encodeURIComponent(unit)}`, {
         method: "PUT",
         body: JSON.stringify({ name, is_active: isActive, graph: toGraph(nodes, edges) }),
       });
@@ -261,7 +260,7 @@ export default function WorkflowEditor() {
   async function del() {
     if (!model.trim() || !confirm(`Delete the workflow for ${model}? That model reverts to the code table.`)) return;
     try {
-      await api(`workflows/${encodeURIComponent(model.trim())}`, { method: "DELETE" });
+      await api(`workflows/${encodeURIComponent(model.trim())}?unit=${encodeURIComponent(unit)}`, { method: "DELETE" });
       setStatus("Deleted.");
       setLoaded(false);
       setNodes([]);

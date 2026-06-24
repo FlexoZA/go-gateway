@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Spinner } from "@/components/ui";
 import { ConfigField } from "@/components/ConfigField";
-import { CATEGORIES, segmentMeta, SEGMENTS } from "@/lib/howenConfig";
+import { deviceConfigSchema } from "@/lib/deviceConfig";
+import type { SegmentMeta } from "@/lib/howenConfig";
 
 // DeviceConfig is the full device-configuration editor. It reads/writes the
 // unit's parameter segments over the gateway, grouped into the device's own menu
@@ -23,16 +24,20 @@ function deepSet(o: any, path: string[], val: any): any {
   return { ...o, [h]: deepSet(o?.[h] ?? {}, t, val) };
 }
 // Order a segment's fields: curated ones first (in metadata order), then the rest.
-function orderedEntries(seg: string, obj: Sc): [string, any][] {
-  const curated = Object.keys(SEGMENTS[seg]?.fields || {});
+function orderedEntries(segments: Record<string, SegmentMeta>, seg: string, obj: Sc): [string, any][] {
+  const curated = Object.keys(segments[seg]?.fields || {});
   const keys = Object.keys(obj);
   const head = curated.filter((k) => k in obj);
   const tail = keys.filter((k) => !head.includes(k)).sort();
   return [...head, ...tail].map((k) => [k, obj[k]]);
 }
 
-export function DeviceConfig({ serial }: { serial: string }) {
-  const [cat, setCat] = useState(CATEGORIES[0].key);
+export function DeviceConfig({ serial, unit }: { serial: string; unit: string }) {
+  const schema = deviceConfigSchema(unit);
+  const CATEGORIES = schema?.CATEGORIES ?? [];
+  const SEGMENTS = schema?.SEGMENTS ?? {};
+  const segmentMeta = schema?.segmentMeta ?? ((seg: string): SegmentMeta => ({ label: seg, fields: {} }));
+  const [cat, setCat] = useState(CATEGORIES[0]?.key ?? "");
   const [sc, setSc] = useState<Sc>({});
   const [dirty, setDirty] = useState<Sc>({});
   const [loading, setLoading] = useState(true);
@@ -67,6 +72,14 @@ export function DeviceConfig({ serial }: { serial: string }) {
   useEffect(() => {
     load(cat);
   }, [cat, load]);
+
+  if (!schema) {
+    return (
+      <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
+        No editable device configuration for this unit type.
+      </div>
+    );
+  }
 
   const get = (path: string[]) => deepGet(dirty, path);
   const set = (path: string[], val: string) => setDirty((d) => deepSet(d, path, val));
@@ -156,7 +169,7 @@ export function DeviceConfig({ serial }: { serial: string }) {
                 </div>
                 {meta.note && <p className="mb-2 text-xs text-amber-300/80">⚠ {meta.note}</p>}
                 <div className="grow space-y-1">
-                  {orderedEntries(seg, sc[seg]).map(([k, v]) => (
+                  {orderedEntries(SEGMENTS, seg, sc[seg]).map(([k, v]) => (
                     <ConfigField key={k} name={k} value={v} path={[seg, k]} segFields={meta.fields} readonly={meta.readonly} get={get} set={set} />
                   ))}
                 </div>

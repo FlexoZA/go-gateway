@@ -36,6 +36,11 @@ const settingsChangeChannel = "server_settings_changed"
 // trigger whenever a telemetry webhook is added, edited, toggled, or removed.
 const webhooksChangeChannel = "webhooks_changed"
 
+// unitSettingsChangeChannel is the LISTEN/NOTIFY channel fired by the
+// unit_settings trigger (carrying the affected unit) whenever a per-unit-type
+// setting changes, so the running gateway hot-reloads that unit's settings.
+const unitSettingsChangeChannel = "unit_settings_changed"
+
 // schema is applied idempotently on startup. Add server-settings tables here as
 // they are designed.
 var schema = []string{
@@ -207,6 +212,28 @@ var schema = []string{
 	`CREATE TRIGGER webhooks_notify
 		AFTER INSERT OR UPDATE OR DELETE ON webhooks
 		FOR EACH ROW EXECUTE FUNCTION notify_webhooks_changed()`,
+	// Per-unit-type gateway settings (key/value, scoped by unit). Distinct from the
+	// global server_settings and from per-device parameter config: these are a
+	// unit's own editable settings (e.g. a GPS tracker's timezone offset), declared
+	// by the unit's SettingsSchema and seeded from its defaults. Changes apply to
+	// the running gateway instantly via NOTIFY (carrying the unit).
+	`CREATE TABLE IF NOT EXISTS unit_settings (
+		unit       TEXT NOT NULL,
+		key        TEXT NOT NULL,
+		value      TEXT NOT NULL DEFAULT '',
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+		PRIMARY KEY (unit, key)
+	)`,
+	`CREATE OR REPLACE FUNCTION notify_unit_settings_changed() RETURNS trigger AS $$
+	BEGIN
+		PERFORM pg_notify('unit_settings_changed', COALESCE(NEW.unit, OLD.unit));
+		RETURN NULL;
+	END;
+	$$ LANGUAGE plpgsql`,
+	`DROP TRIGGER IF EXISTS unit_settings_notify ON unit_settings`,
+	`CREATE TRIGGER unit_settings_notify
+		AFTER INSERT OR UPDATE OR DELETE ON unit_settings
+		FOR EACH ROW EXECUTE FUNCTION notify_unit_settings_changed()`,
 	// Recorded video clips pulled from a device's SD card (H-Protocol playback,
 	// 0x4070). The .mp4 is stored on the server (CLIPS_ROOT, the "bucket");
 	// storage_path is relative to that root. status: requested → receiving →

@@ -61,6 +61,9 @@ type DataStore interface {
 	ListSettings(ctx context.Context) ([]map[string]any, error)
 	SetSetting(ctx context.Context, key, value string) error
 
+	ListUnitSettings(ctx context.Context, unit string) ([]map[string]any, error)
+	SetUnitSetting(ctx context.Context, unit, key, value string) error
+
 	ListWebhooks(ctx context.Context) ([]map[string]any, error)
 	CreateWebhook(ctx context.Context, name, url string, enabled bool) (int64, error)
 	UpdateWebhook(ctx context.Context, id int64, name, url string, enabled bool) error
@@ -93,10 +96,20 @@ const (
 // satisfies DataStore structurally). Handlers compare by message.
 const notFoundMsg = "not found"
 
+// UnitInfo describes one hosted unit type for the admin panel: its name, the
+// effective capabilities it offers right now, and (optionally) its editable
+// settings schema. The gateway hosts one or more of these.
+type UnitInfo struct {
+	Name   string                        `json:"unit"`
+	Caps   gateway.EffectiveCapabilities `json:"capabilities"`
+	Schema []gateway.SettingField        `json:"schema,omitempty"`
+}
+
 // Server is the HTTP API server.
 type Server struct {
 	addr          string
-	unit          string
+	units         []UnitInfo // hosted unit types
+	defaultUnit   string     // units[0].Name — back-compat default for unit-scoped routes
 	log           *logging.Logger
 	verifier      KeyVerifier
 	data          DataStore
@@ -104,8 +117,26 @@ type Server struct {
 	internalToken string
 	hlsRoot       string
 	clipsRoot     string
-	caps          gateway.EffectiveCapabilities
 	srv           *http.Server
+}
+
+// unitNames returns the set of hosted unit-type names.
+func (s *Server) unitNames() map[string]bool {
+	set := make(map[string]bool, len(s.units))
+	for _, u := range s.units {
+		set[u.Name] = true
+	}
+	return set
+}
+
+// unitInfo returns the hosted unit by name.
+func (s *Server) unitInfo(name string) (UnitInfo, bool) {
+	for _, u := range s.units {
+		if u.Name == name {
+			return u, true
+		}
+	}
+	return UnitInfo{}, false
 }
 
 // SetInternalToken sets the shared secret the admin panel uses to authenticate
@@ -120,22 +151,24 @@ func (s *Server) SetHLSRoot(dir string) { s.hlsRoot = dir }
 // bucket), used by the clip download handler.
 func (s *Server) SetClipsRoot(dir string) { s.clipsRoot = dir }
 
-// SetCapabilities records the gateway's effective capabilities, served at
-// GET /api/gateway/info so the admin panel can hide UI this build/config lacks.
-func (s *Server) SetCapabilities(c gateway.EffectiveCapabilities) { s.caps = c }
-
-// New builds the API server. unit is this gateway's unit type (e.g. "howen"),
-// used as the default for mapping endpoints. If verifier is nil, protected
-// routes respond 503. If data is nil, the data-backed endpoints respond 503
-// while connected-device endpoints still work via the hub.
-func New(host string, port int, unit string, verifier KeyVerifier, data DataStore, hub *gateway.Hub, log *logging.Logger) *Server {
+// New builds the API server. units are the hosted unit types (name + effective
+// capabilities + optional settings schema); the first is the back-compat default
+// for unit-scoped routes that omit a unit. If verifier is nil, protected routes
+// respond 503. If data is nil, the data-backed endpoints respond 503 while
+// connected-device endpoints still work via the hub.
+func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data DataStore, hub *gateway.Hub, log *logging.Logger) *Server {
+	defaultUnit := ""
+	if len(units) > 0 {
+		defaultUnit = units[0].Name
+	}
 	s := &Server{
-		addr:     net.JoinHostPort(host, itoa(port)),
-		unit:     unit,
-		log:      log.With("http"),
-		verifier: verifier,
-		data:     data,
-		hub:      hub,
+		addr:        net.JoinHostPort(host, itoa(port)),
+		units:       units,
+		defaultUnit: defaultUnit,
+		log:         log.With("http"),
+		verifier:    verifier,
+		data:        data,
+		hub:         hub,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
@@ -207,9 +240,15 @@ func New(host string, port int, unit string, verifier KeyVerifier, data DataStor
 		"PUT /api/workflows/{model}":    s.handleUpsertWorkflow,
 		"DELETE /api/workflows/{model}": s.handleDeleteWorkflow,
 
-		// Editable server settings.
+		// Editable server settings (global).
 		"GET /api/settings": s.handleListSettings,
 		"PUT /api/settings": s.handleSetSetting,
+
+		// Per-unit-type settings (a unit's own editable gateway-side settings,
+		// distinct from per-device parameter config). Schema is declared by the unit.
+		"GET /api/unit-types/{unit}/settings/schema": s.handleUnitSettingsSchema,
+		"GET /api/unit-types/{unit}/settings":        s.handleListUnitSettings,
+		"PUT /api/unit-types/{unit}/settings":        s.handleSetUnitSetting,
 
 		// Telemetry webhooks (the GPS/event data sinks).
 		"GET /api/webhooks":         s.handleListWebhooks,
@@ -252,21 +291,24 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "unit": s.unit})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "unit": s.defaultUnit})
 }
 
 func (s *Server) handlePing(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// GET /api/gateway/info — this gateway's unit type and effective capabilities
-// (declared by the unit AND enabled by config). The admin panel reads it once to
-// hide UI for features this build/config doesn't offer.
+// GET /api/gateway/info — the hosted unit types and each one's effective
+// capabilities (declared by the unit AND enabled by config). The admin panel reads
+// it once to render per-unit UI and hide features this build/config doesn't offer.
+// `unit`/`capabilities` echo the first unit for backward compatibility.
 func (s *Server) handleGatewayInfo(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"unit":         s.unit,
-		"capabilities": s.caps,
-	})
+	resp := map[string]any{"units": s.units}
+	if len(s.units) > 0 {
+		resp["unit"] = s.units[0].Name
+		resp["capabilities"] = s.units[0].Caps
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // POST /api/auth/login — verify a front-end user's email/password.
@@ -1057,7 +1099,9 @@ func (s *Server) handleApproveDevice(w http.ResponseWriter, r *http.Request) {
 	serial := r.PathValue("serial")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	if err := s.data.ApproveDevice(ctx, serial, s.unit); err != nil {
+	// The fallback protocol is used only when the pending device has no known
+	// protocol guess; an explicit ?unit= overrides the default.
+	if err := s.data.ApproveDevice(ctx, serial, s.unitOrDefault(r.URL.Query().Get("unit"))); err != nil {
 		s.dataError(w, "approve_device", err)
 		return
 	}
@@ -1100,7 +1144,10 @@ func (s *Server) handleListMappings(w http.ResponseWriter, r *http.Request) {
 	if !s.dataReady(w) {
 		return
 	}
-	unit := s.unitParam(r)
+	unit, ok := s.requireUnit(w, r)
+	if !ok {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	rows, err := s.data.ListEventMappings(ctx, unit)
@@ -1127,9 +1174,10 @@ func (s *Server) handleUpsertMapping(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
 		return
 	}
-	unit := body.Unit
-	if strings.TrimSpace(unit) == "" {
-		unit = s.unit
+	unit := s.unitOrDefault(body.Unit)
+	if !s.unitNames()[unit] {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown unit: " + unit})
+		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -1150,7 +1198,10 @@ func (s *Server) handleDeleteMapping(w http.ResponseWriter, r *http.Request) {
 	if !s.dataReady(w) {
 		return
 	}
-	unit := s.unitParam(r)
+	unit, ok := s.requireUnit(w, r)
+	if !ok {
+		return
+	}
 	mapType := strings.TrimSpace(r.URL.Query().Get("map_type"))
 	codeStr := strings.TrimSpace(r.URL.Query().Get("code"))
 	if mapType == "" || codeStr == "" {
@@ -1180,14 +1231,18 @@ func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 	if !s.dataReady(w) {
 		return
 	}
+	unit, ok := s.requireUnit(w, r)
+	if !ok {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	rows, err := s.data.ListWorkflows(ctx, s.unit)
+	rows, err := s.data.ListWorkflows(ctx, unit)
 	if err != nil {
 		s.dataError(w, "list_workflows", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"unit": s.unit, "workflows": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"unit": unit, "workflows": rows})
 }
 
 // GET /api/workflows/{model} — one model's full workflow (graph included).
@@ -1195,10 +1250,14 @@ func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
 	if !s.dataReady(w) {
 		return
 	}
+	unit, ok := s.requireUnit(w, r)
+	if !ok {
+		return
+	}
 	model := r.PathValue("model")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	wf, err := s.data.GetWorkflow(ctx, s.unit, model)
+	wf, err := s.data.GetWorkflow(ctx, unit, model)
 	if err != nil {
 		if err.Error() == notFoundMsg {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no workflow for this model"})
@@ -1214,6 +1273,10 @@ func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
 // validates the graph; a structurally invalid graph returns 400.
 func (s *Server) handleUpsertWorkflow(w http.ResponseWriter, r *http.Request) {
 	if !s.dataReady(w) {
+		return
+	}
+	unit, ok := s.requireUnit(w, r)
+	if !ok {
 		return
 	}
 	model := r.PathValue("model")
@@ -1236,7 +1299,7 @@ func (s *Server) handleUpsertWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	if err := s.data.UpsertWorkflow(ctx, s.unit, model, body.Name, body.Graph, active); err != nil {
+	if err := s.data.UpsertWorkflow(ctx, unit, model, body.Name, body.Graph, active); err != nil {
 		if isValidationErr(err) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
@@ -1244,7 +1307,7 @@ func (s *Server) handleUpsertWorkflow(w http.ResponseWriter, r *http.Request) {
 		s.dataError(w, "upsert_workflow", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "unit": s.unit, "model": model, "is_active": active})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "unit": unit, "model": model, "is_active": active})
 }
 
 // DELETE /api/workflows/{model} — remove a model's workflow.
@@ -1252,10 +1315,14 @@ func (s *Server) handleDeleteWorkflow(w http.ResponseWriter, r *http.Request) {
 	if !s.dataReady(w) {
 		return
 	}
+	unit, ok := s.requireUnit(w, r)
+	if !ok {
+		return
+	}
 	model := r.PathValue("model")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	if err := s.data.DeleteWorkflow(ctx, s.unit, model); err != nil {
+	if err := s.data.DeleteWorkflow(ctx, unit, model); err != nil {
 		if err.Error() == notFoundMsg {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no workflow for this model"})
 			return
@@ -1353,6 +1420,117 @@ func (s *Server) handleSetSetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key": key})
+}
+
+// GET /api/unit-types/{unit}/settings/schema — a unit's editable settings schema
+// (declared by the unit). Drives the unit's settings screen in the admin panel.
+func (s *Server) handleUnitSettingsSchema(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.unitInfo(r.PathValue("unit"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown unit"})
+		return
+	}
+	schema := u.Schema
+	if schema == nil {
+		schema = []gateway.SettingField{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"unit": u.Name, "schema": schema})
+}
+
+// GET /api/unit-types/{unit}/settings — a unit's current stored setting values.
+func (s *Server) handleListUnitSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.dataReady(w) {
+		return
+	}
+	unit := r.PathValue("unit")
+	if !s.unitNames()[unit] {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown unit"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	rows, err := s.data.ListUnitSettings(ctx, unit)
+	if err != nil {
+		s.dataError(w, "list_unit_settings", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"unit": unit, "settings": rows})
+}
+
+// PUT /api/unit-types/{unit}/settings — upsert one of a unit's settings. The key
+// must be declared in the unit's schema; the value is validated against the
+// declared field type. Applies to the running gateway instantly via NOTIFY.
+func (s *Server) handleSetUnitSetting(w http.ResponseWriter, r *http.Request) {
+	if !s.dataReady(w) {
+		return
+	}
+	u, ok := s.unitInfo(r.PathValue("unit"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown unit"})
+		return
+	}
+	var body struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	key := strings.TrimSpace(body.Key)
+	field, known := unitSettingField(u.Schema, key)
+	if !known {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown setting key for unit " + u.Name})
+		return
+	}
+	if msg := validateSettingValue(field, body.Value); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": msg})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := s.data.SetUnitSetting(ctx, u.Name, key, body.Value); err != nil {
+		s.dataError(w, "set_unit_setting", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "unit": u.Name, "key": key})
+}
+
+// unitSettingField finds a schema field by key.
+func unitSettingField(schema []gateway.SettingField, key string) (gateway.SettingField, bool) {
+	for _, f := range schema {
+		if f.Key == key {
+			return f, true
+		}
+	}
+	return gateway.SettingField{}, false
+}
+
+// validateSettingValue checks a value against a field's declared type, returning
+// an error message ("" when valid).
+func validateSettingValue(f gateway.SettingField, value string) string {
+	v := strings.TrimSpace(value)
+	switch f.Type {
+	case "number":
+		if v == "" {
+			return f.Key + " must be a number"
+		}
+		if _, err := strconv.ParseFloat(v, 64); err != nil {
+			return f.Key + " must be a number"
+		}
+	case "bool":
+		if !validBool(v) {
+			return f.Key + " must be true or false"
+		}
+	case "select":
+		for _, opt := range f.Options {
+			if v == opt {
+				return ""
+			}
+		}
+		return f.Key + " must be one of: " + strings.Join(f.Options, ", ")
+	}
+	return ""
 }
 
 // validBool reports whether v is a recognizable boolean string.
@@ -1561,11 +1739,33 @@ func (s *Server) dataError(w http.ResponseWriter, event string, err error) {
 	writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal error"})
 }
 
-func (s *Server) unitParam(r *http.Request) string {
-	if u := strings.TrimSpace(r.URL.Query().Get("unit")); u != "" {
+// unitOrDefault returns an explicit unit value, falling back to the back-compat
+// default unit when blank.
+func (s *Server) unitOrDefault(unit string) string {
+	if u := strings.TrimSpace(unit); u != "" {
 		return u
 	}
-	return s.unit
+	return s.defaultUnit
+}
+
+// requireUnit resolves the unit for a unit-scoped endpoint from the `?unit=` query
+// parameter. When only one unit is hosted it defaults to that unit; when several
+// are hosted the parameter is mandatory (writes 400 and returns ok=false). A
+// supplied unit is validated against the hosted set.
+func (s *Server) requireUnit(w http.ResponseWriter, r *http.Request) (string, bool) {
+	unit := strings.TrimSpace(r.URL.Query().Get("unit"))
+	if unit == "" {
+		if len(s.units) == 1 {
+			return s.defaultUnit, true
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unit query parameter is required"})
+		return "", false
+	}
+	if !s.unitNames()[unit] {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown unit: " + unit})
+		return "", false
+	}
+	return unit, true
 }
 
 // requireAPIKey enforces a valid `Authorization: Bearer <key>` on the request.
