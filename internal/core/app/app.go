@@ -160,7 +160,13 @@ func (a *App) newUnitRuntime(proto gateway.Protocol, baseDeps gateway.Deps) *uni
 	// when video is enabled (a media advertise host is configured). Today only the
 	// howen unit qualifies; a GPS-only unit's deps.Media stays nil.
 	if _, ok := proto.(gateway.MediaServerProvider); ok && a.cfg.VideoEnabled() {
-		u.mediaPort = a.resolveStoredPort(httpapi.MediaPortKey(u.name), a.cfg.MediaPort)
+		// A unit may declare its own media-port default so two video units in one
+		// process don't collide on the shared MEDIA_PORT; the stored override wins.
+		mediaBase := a.cfg.MediaPort
+		if dmp, ok := proto.(gateway.DefaultMediaPort); ok {
+			mediaBase = dmp.DefaultMediaPort()
+		}
+		u.mediaPort = a.resolveStoredPort(httpapi.MediaPortKey(u.name), mediaBase)
 		u.media = media.NewManager(a.cfg.HLSRoot, a.cfg.FFmpegPath, a.log)
 		u.deps.Media = u.media
 		u.deps.MediaAdvertiseHost = net.JoinHostPort(a.cfg.MediaAdvertiseHost, strconv.Itoa(u.mediaPort))

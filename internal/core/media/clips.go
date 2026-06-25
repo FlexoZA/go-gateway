@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -45,7 +46,8 @@ type clipSession struct {
 	outFile string
 
 	mu        sync.Mutex
-	started   bool // ffmpeg writer running (begins on the first keyframe)
+	started   bool     // ffmpeg writer running (begins on the first keyframe)
+	raw       *os.File // raw-container writer (set for clips delivered as a finished file, e.g. MP4)
 	bytes     int64
 	lastProg  int64
 	finalized bool
@@ -202,10 +204,95 @@ func (r *ClipRegistry) Abort(ss, reason string) {
 	clipID := s.clipID
 	s.mu.Unlock()
 
-	r.mgr.Stop(ss) // kills ffmpeg and removes the partial file
+	if s.raw != nil { // raw-file clip: close and drop the partial
+		_ = s.raw.Close()
+		_ = os.Remove(s.outFile)
+	} else {
+		r.mgr.Stop(ss) // kills ffmpeg and removes the partial file
+	}
 	ctx, cancel := dbctx()
 	_ = r.store.UpdateClipStatus(ctx, clipID, "error", reason)
 	cancel()
+}
+
+// WriteRaw feeds bytes of a clip delivered as a finished container (e.g. an MP4
+// the device uploads whole, as Cathexis does) straight to the output file — no
+// ffmpeg, no keyframe gating. Pair with FinishRaw. The first call opens the file.
+func (r *ClipRegistry) WriteRaw(ss string, data []byte) {
+	s := r.get(ss)
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finalized {
+		return
+	}
+	if !s.started {
+		if err := os.MkdirAll(filepath.Dir(s.outFile), 0o755); err != nil {
+			r.log.Error(map[string]any{"event": "clip_mkdir_failed", "ss": ss, "error": err.Error()})
+			return
+		}
+		f, err := os.Create(s.outFile)
+		if err != nil {
+			r.log.Error(map[string]any{"event": "clip_create_failed", "ss": ss, "error": err.Error()})
+			return
+		}
+		s.raw = f
+		s.started = true
+		ctx, cancel := dbctx()
+		_ = r.store.UpdateClipStatus(ctx, s.clipID, "receiving", "")
+		cancel()
+		r.log.Info(map[string]any{"event": "clip_receiving", "ss": ss, "clip_id": s.clipID, "mode": "raw"})
+	}
+	if _, err := s.raw.Write(data); err != nil {
+		r.log.Debug(map[string]any{"event": "clip_raw_write_failed", "ss": ss, "error": err.Error()})
+		return
+	}
+	s.bytes += int64(len(data))
+	if s.bytes-s.lastProg >= clipProgressBytes {
+		s.lastProg = s.bytes
+		ctx, cancel := dbctx()
+		_ = r.store.UpdateClipProgress(ctx, s.clipID, s.bytes, 0)
+		cancel()
+	}
+}
+
+// FinishRaw finalizes a raw-file clip: closes the file, records its size, and
+// marks the clip ready. Idempotent.
+func (r *ClipRegistry) FinishRaw(ss string) {
+	r.mu.Lock()
+	s := r.byID[ss]
+	delete(r.byID, ss)
+	r.mu.Unlock()
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.finalized {
+		s.mu.Unlock()
+		return
+	}
+	s.finalized = true
+	started := s.started
+	clipID := s.clipID
+	size := s.bytes
+	if s.raw != nil {
+		_ = s.raw.Close()
+	}
+	outFile := s.outFile
+	s.mu.Unlock()
+
+	ctx, cancel := dbctx()
+	defer cancel()
+	if !started || size == 0 {
+		r.log.Info(map[string]any{"event": "clip_empty", "ss": ss, "clip_id": clipID})
+		_ = r.store.UpdateClipStatus(ctx, clipID, "error", "device sent no data")
+		_ = os.Remove(outFile)
+		return
+	}
+	r.log.Info(map[string]any{"event": "clip_ready", "ss": ss, "clip_id": clipID, "bytes": size, "mode": "raw"})
+	_ = r.store.FinishClip(ctx, clipID, size)
 }
 
 // detectCodec inspects an Annex-B access unit to decide whether it is H.264 or

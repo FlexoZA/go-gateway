@@ -9,6 +9,7 @@
 package main
 
 import (
+	"github.com/dfm/device-gateway/internal/cathexis"
 	"github.com/dfm/device-gateway/internal/core/app"
 	"github.com/dfm/device-gateway/internal/fleetiger"
 	"github.com/dfm/device-gateway/internal/howen"
@@ -18,5 +19,6 @@ func main() {
 	app.Run(
 		howen.New(),
 		fleetiger.New(),
+		cathexis.New(),
 	)
 }

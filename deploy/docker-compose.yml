@@ -37,6 +37,7 @@ services:
       # 8050); override here if needed. Keep these in sync with the ports mapping.
       - HOWEN_PORT=${HOWEN_PORT:-33000}
       - FLEETIGER_PORT=${FLEETIGER_PORT:-8050}
+      - CATHEXIS_PORT=${CATHEXIS_PORT:-33010}
       # Management/control HTTP API (API-key protected). 0 disables.
       - HTTP_PORT=${HTTP_PORT:-8080}
       # Shared secret the admin panel uses to authenticate (works before any DB
@@ -65,6 +66,8 @@ services:
       - "33000:33000"  # howen control
       - "33001:33001"  # howen media
       - "8050:8050"    # fleetiger
+      - "33010:33010"  # cathexis control
+      - "33011:33011"  # cathexis media
       - "8080:8080"    # HTTP API
     restart: unless-stopped
 

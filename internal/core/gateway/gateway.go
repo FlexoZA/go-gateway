@@ -144,6 +144,14 @@ type DefaultPort interface {
 	DefaultDevicePort() int
 }
 
+// DefaultMediaPort lets a video-capable unit declare its own media (device-side
+// video) port default, so several video units in one process don't collide on the
+// shared MEDIA_PORT. Detected via type assertion; a unit that doesn't implement it
+// uses the global MEDIA_PORT. The per-unit stored override still wins over this.
+type DefaultMediaPort interface {
+	DefaultMediaPort() int
+}
+
 // SettingField describes one editable gateway-side, unit-type-level setting (e.g.
 // a GPS tracker's timezone offset) — distinct from per-device parameter config.
 // A unit declares its fields via ConfigurableUnit; the admin renders them as that
