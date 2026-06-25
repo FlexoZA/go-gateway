@@ -16,7 +16,11 @@ export function gatewayConfigured(): boolean {
 
 export async function gatewayFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${API_KEY}`);
+  // Default to the server-held service key, but let an explicit Authorization
+  // header (e.g. the API console testing a specific Bearer key) win.
+  if (!headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${API_KEY}`);
+  }
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
