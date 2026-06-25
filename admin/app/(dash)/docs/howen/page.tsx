@@ -258,6 +258,35 @@ export default function HowenDocsPage() {
         missing.
       </Endpoint>
 
+      <h3 id="trimmed">Downloading a trimmed clip</h3>
+      <p>
+        A clip is <strong>already trimmed</strong> — its length is whatever window you request, not
+        a fixed recording chunk. To get a precise cut, set <code>start_utc</code> and{" "}
+        <code>end_utc</code> on the clip request to exactly the segment you want: the device streams
+        only that window and the gateway remuxes it into a single <code>.mp4</code> (no re-encode).
+        There is no separate trim step and nothing to trim on the download call itself — the request
+        window <em>is</em> the trim.
+      </p>
+      <p>
+        The window can be any sub-range inside available footage; it doesn&rsquo;t have to line up
+        with recording-file boundaries. For example, to pull a 15-second cut:
+      </p>
+      <CodeBlock label="Request a 15s trimmed clip">{`// 1) confirm footage exists for the window (see step 1)
+GET /api/units/864312087845313/recordings?camera=0&profile=0&start_utc=1750000000&end_utc=1750000600
+
+// 2) request just the 15s you want (end_utc - start_utc = 15)
+POST /api/units/864312087845313/clips
+{ "camera": 0, "profile": 0, "start_utc": 1750000000, "end_utc": 1750000015, "audio": false }
+
+// 3) poll GET /api/clips/{id} until status == "ready", then
+GET /api/clips/{id}/download   →   a 15-second .mp4`}</CodeBlock>
+      <Callout tone="info">
+        The cut starts at the nearest video keyframe to <code>start_utc</code>, so the very first
+        fraction of a second can be approximate; <code>end_utc</code> bounds the end. Keep the
+        window inside one continuous recording for best results, and always confirm against{" "}
+        <code>/recordings</code> first — a window with no footage produces nothing to download.
+      </Callout>
+
       <Callout tone="info" title="Time windows">
         Recording/clip windows are true-UTC Unix seconds in the API. Howen indexes SD footage by the
         device&rsquo;s local wall-clock, so the gateway localizes the window using its{" "}
