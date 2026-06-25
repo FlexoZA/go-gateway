@@ -23,6 +23,7 @@ import (
 
 	"github.com/dfm/device-gateway/internal/core/device"
 	"github.com/dfm/device-gateway/internal/core/gateway"
+	"github.com/dfm/device-gateway/internal/core/mapping"
 )
 
 const (
@@ -54,6 +55,13 @@ func (*Protocol) DefaultMediaPort() int { return defaultMediaPortNum }
 // IdleTimeout widens the read deadline — Cathexis control sockets are quiet
 // between GPS reports (the device heartbeats every few minutes).
 func (*Protocol) IdleTimeout() time.Duration { return idleTimeout }
+
+// MappingProvider: Cathexis event output is driven by an editable
+// device-event → event-code table (string device names mapped onto stable
+// synthetic integer codes — see events.go). These thin methods let the app runner
+// seed defaults and apply the DB set without importing this package.
+func (*Protocol) DefaultMappingEntries() []mapping.Entry { return DefaultMappingEntries() }
+func (*Protocol) ApplyMappings(byModel mapping.ByModel)  { ApplyMappings(byModel) }
 
 // ReadFrame decodes one Cathexis frame (12-byte header + payload).
 func (*Protocol) ReadFrame(r *bufio.Reader) (gateway.Frame, error) {

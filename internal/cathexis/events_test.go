@@ -1,0 +1,51 @@
+package cathexis
+
+import (
+	"testing"
+
+	"github.com/dfm/device-gateway/internal/core/mapping"
+)
+
+func TestDefaultMappingEntries(t *testing.T) {
+	entries := DefaultMappingEntries()
+	if len(entries) != len(defaultCathexisEvents) {
+		t.Fatalf("got %d entries, want %d", len(entries), len(defaultCathexisEvents))
+	}
+	byCode := map[int]mapping.Entry{}
+	for _, e := range entries {
+		if e.MapType != mapTypeEvent {
+			t.Fatalf("map_type = %q, want %q", e.MapType, mapTypeEvent)
+		}
+		byCode[e.Code] = e
+	}
+	// Code 3 is harsh_braking → HARSH:BRAKING, with the device name in Description.
+	if e := byCode[3]; e.EventCode != "HARSH:BRAKING" || e.Description != "harsh_braking" {
+		t.Fatalf("code 3 = %+v, want HARSH:BRAKING / harsh_braking", e)
+	}
+}
+
+func TestApplyMappingsOverride(t *testing.T) {
+	t.Cleanup(func() { currentEventCodes.Store(nil) }) // restore defaults for other tests
+
+	// Override harsh_braking (code 3) to a custom event code.
+	ApplyMappings(mapping.ByModel{
+		"": mapping.Table{mapTypeEvent: map[int]string{3: "CUSTOM:HARD_BRAKE"}},
+	})
+	got := toStandardEventCodes(map[string]any{"name": "harsh_braking"}, true)
+	if len(got) != 1 || got[0] != "CUSTOM:HARD_BRAKE" {
+		t.Fatalf("after override got %v, want [CUSTOM:HARD_BRAKE]", got)
+	}
+
+	// A code not in the override falls back to the built-in default.
+	got = toStandardEventCodes(map[string]any{"name": "panic"}, true)
+	if len(got) != 1 || got[0] != "PANIC" {
+		t.Fatalf("got %v, want [PANIC] (built-in fallback)", got)
+	}
+
+	// Reset and confirm defaults are back.
+	currentEventCodes.Store(nil)
+	got = toStandardEventCodes(map[string]any{"name": "harsh_braking"}, true)
+	if len(got) != 1 || got[0] != "HARSH:BRAKING" {
+		t.Fatalf("after reset got %v, want [HARSH:BRAKING]", got)
+	}
+}
