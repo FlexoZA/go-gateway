@@ -48,30 +48,30 @@ initialized it returns `409` and the panel routes to normal login.
 | Devices | `/devices` | `GET /api/devices`, `GET /api/devices/pending`, `POST …/approve`, `POST …/reject`, `DELETE /api/devices/{serial}` |
 | Device detail | `/devices/{serial}` | **Status tab:** `GET /api/units/{serial}/status` (live 4G/network, module health, storage, IO, GPS). **Config tab:** `GET/PUT /api/units/{serial}/config` (full device-settings editor, below). `POST …/commands` `wake_device` when the unit is in standby |
 | Clips | `/clips` | `GET /api/units/{serial}/recordings` (search footage), `POST /api/units/{serial}/clips` (pull a clip or trimmed section), `GET /api/clips`, `GET /api/clips/{id}`, `/download`, `DELETE /api/clips/{id}`. Live preview uses `POST /api/units/{serial}/stream/start`+`stop` and the `/api/hls/` playlist |
-| Device Mapping | `/device-mapping` | **Code table:** `GET/PUT/DELETE /api/mappings` (+ `GET /api/event-codes` picklist). **Visual workflows:** `GET/PUT/DELETE /api/workflows[/{model}]`, `POST /api/workflows/test` |
+| Device Mapping | `/device-mapping` | `GET/PUT/DELETE /api/mappings`, `GET /api/mappings/models`, `POST /api/mappings/copy`, and `GET/POST /api/event-codes` (the event-code picklist) |
+| Device Settings | `/unit-settings` | `GET /api/unit-types/{unit}/settings/schema`, `GET/PUT /api/unit-types/{unit}/settings`, `GET/PUT /api/unit-types/{unit}/ports`, `PUT /api/unit-types/{unit}/capabilities` |
 | Server Settings | `/server-settings` | **Gateway identity / device port / device authorization:** `GET/PUT /api/settings` (`gateway_name` & `device_reject_unknown` live, `device_port` restart-applied). **Webhooks:** `GET/POST /api/webhooks`, `PUT/DELETE /api/webhooks/{id}` (GPS/event sinks; multiple, each enable/disable) |
 | Users | `/users` | `GET/POST /api/users`, `PUT/DELETE /api/users/{id}` (create accounts, enable/disable, reset password, delete) |
 | API Keys | `/api-keys` | `GET/POST /api/api-keys`, `DELETE /api/api-keys/{prefix}` (generate external API keys — plaintext shown once — and revoke) |
 | Logs | `/logs` | `GET /api/logs`, `GET /api/device-errors` |
+| Live Logs | `/live-logs` | `GET /api/logs/live` (cursor-polled tail), `GET/PUT /api/logs/level` (capture level) |
+| API Console | `/api-console` | A Postman-style developer tool that can send any endpoint above (proxied through the BFF so the API key stays server-side) |
+| Docs | `/docs` | Static integration guides and the in-admin HTTP API reference |
 
 Device approval only has pending entries when the gateway runs with
 `DEVICE_REJECT_UNKNOWN=true` (otherwise unknown serials are auto-admitted).
 Mapping edits apply to the running gateway within milliseconds via Postgres
 LISTEN/NOTIFY — no redeploy.
 
-### Two mapping methods
+### Event mapping
 
-**Device Mapping** has two tabs, both editing how raw device codes become ACM
-event codes:
-
-- **Code table** — a flat, per-unit `code → event_code` lookup (applies to all
-  models). Simple and fast.
-- **Visual workflows** — a per-**model** node graph ("N8N-style") edited on a
-  React Flow canvas: `input → switch/condition → setEvent/setField → output`.
-  Strictly per model; a model with no workflow falls back to the code table. The
-  canvas has a live **Test run** panel that dry-runs the graph against a sample
-  payload before saving. See [http-api.md](http-api.md#per-model-mapping-workflows)
-  for the graph/node schema.
+**Device Mapping** edits how raw device codes become ACM event codes via a
+`code → event_code` lookup table. Mappings are per-unit by default, with optional
+per-**model** overrides (a device uses its model's rows if present, else the
+unit-wide defaults); `GET /api/mappings/models` lists models that have overrides
+and `POST /api/mappings/copy` clones one model's rows onto another. The
+`GET/POST /api/event-codes` picklist supplies (and extends) the available event
+names. Edits apply to the running gateway within milliseconds via NOTIFY.
 
 ### Device detail & config editor
 
@@ -98,7 +98,7 @@ Server-side env vars (see `admin/.env.example`):
 | Var | Required | Description |
 |-----|----------|-------------|
 | `GATEWAY_URL` | yes | Base URL of the gateway HTTP API (e.g. `http://howen:8080`). |
-| `GATEWAY_API_KEY` | yes | API key (`dgw_…`) the BFF uses for every gateway call. |
+| `GATEWAY_API_TOKEN` | yes | Shared internal service token (same value as the gateway's `INTERNAL_API_TOKEN`) the BFF uses for every gateway call — this works before any DB-minted key exists, enabling first-run setup. A `dgw_…` key in `GATEWAY_API_KEY` is also accepted as a fallback if this is unset. |
 | `SESSION_SECRET` | yes | ≥16-char secret signing session cookies. `openssl rand -base64 32`. |
 | `SESSION_TTL_HOURS` | no | Session lifetime in hours (default 12). |
 
@@ -116,7 +116,7 @@ make adduser EMAIL=admin@example.com
 make apikey ARGS='create --name admin-panel'   # prints the key ONCE
 
 # Put the printed key + a random SESSION_SECRET in deploy/.env:
-#   GATEWAY_API_KEY=dgw_...
+#   GATEWAY_API_TOKEN=dgw_...   (or the shared INTERNAL_API_TOKEN value)
 #   SESSION_SECRET=$(openssl rand -base64 32)
 
 docker compose -f deploy/docker-compose.yml up -d --build admin
@@ -127,7 +127,7 @@ Local development:
 
 ```sh
 cd admin
-cp .env.example .env.local   # fill in GATEWAY_URL, GATEWAY_API_KEY, SESSION_SECRET
+cp .env.example .env.local   # fill in GATEWAY_URL, GATEWAY_API_TOKEN, SESSION_SECRET
 npm install
 npm run dev                  # http://localhost:3000
 ```

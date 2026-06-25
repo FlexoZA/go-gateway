@@ -367,12 +367,13 @@ Drop a serial from quarantine without whitelisting.
 Remove a serial from the approved registry. `200 { "deleted": "<serial>" }` /
 `404` if absent.
 
-### `GET /api/mappings?unit=howen`
+### `GET /api/mappings?unit=howen&model=`
 Editable event-code mappings (full rows). `unit` defaults to this gateway's unit
-type.
+type; the optional `model` narrows to a specific device model (model-specific rows
+override the unit-wide defaults).
 
 ```json
-200 { "unit": "howen", "mappings": [
+200 { "unit": "howen", "model": "Hero-MC30-02", "mappings": [
   { "id": 12, "unit": "howen", "map_type": "dms_adas", "code": 34,
     "event_code": "AI:CELLPHONE", "description": "...", "updated_at": "..." } ] }
 ```
@@ -392,6 +393,24 @@ return `400`.
 ### `DELETE /api/mappings?unit=howen&map_type=dms_adas&code=34`
 Remove a mapping (reverts that code to the built-in default). `404` if absent.
 
+### `GET /api/mappings/models`
+List device models that have model-specific mappings for this unit.
+
+```json
+200 { "unit": "howen", "models": ["Hero-MC30-02", "..."] }
+```
+
+### `POST /api/mappings/copy`
+Copy all of one model's mappings onto another model (instant reload). `to_model`
+is required; `404` for an unknown unit.
+
+```json
+// request
+{ "unit": "howen", "from_model": "Hero-MC30-02", "to_model": "Hero-ME40" }
+// 200
+{ "ok": true, "unit": "howen", "to_model": "Hero-ME40" }
+```
+
 ### `GET /api/logs?limit=200&offset=0`
 Recent gateway/system errors, newest first.
 
@@ -408,6 +427,34 @@ Recent device-reported errors, newest first.
 200 { "errors": [ { "id": 4, "serial": "...", "error_category": "...",
                     "error_message": "...", "remote_address": "...",
                     "created_at": "..." } ], "limit": 200, "offset": 0 }
+```
+
+### `GET /api/logs/live?after=&level=&unit=&q=&limit=`
+The in-memory tail of the gateway's live log stream (connects, approvals, GPS
+forwards, ACKs, errors) — works without a database. Poll with the returned
+`cursor` as the next `after` to follow it. `level` defaults to `info`; `limit`
+defaults to 500 (max 2000); `unit` and `q` filter.
+
+```json
+200 { "entries": [ /* log entries, oldest→newest within the page */ ],
+      "cursor": 42, "capture_level": "info" }
+```
+
+### `GET /api/logs/level`
+The current capture level.
+
+```json
+200 { "level": "info" }
+```
+
+### `PUT /api/logs/level`
+Set the capture level. `level` must be `debug`, `info`, or `error`.
+
+```json
+// request
+{ "level": "debug" }
+// 200
+{ "ok": true, "level": "debug" }
 ```
 
 ### `GET /api/settings`
@@ -430,6 +477,63 @@ currently bound, so a UI can flag a pending restart). `webhook_url` is legacy
 { "ok": true, "key": "webhook_url" }
 // 400 — invalid URL
 { "error": "webhook_url must be a valid http(s) URL" }
+```
+
+### Per-unit-type configuration
+
+A gateway hosts one or more **unit types** (e.g. `howen`, `fleetiger`). These
+routes manage a unit type's own gateway-side settings, listener ports, and
+capability toggles — distinct from a single device's parameter config. `{unit}`
+is the unit-type name; `404` for an unknown unit.
+
+#### `GET /api/unit-types/{unit}/settings/schema`
+The unit's declared settings schema (field names, types, help text).
+```json
+200 { "unit": "howen", "schema": [ { "key": "...", "type": "...", "help": "..." } ] }
+```
+
+#### `GET /api/unit-types/{unit}/settings`
+Current values for the unit's settings.
+```json
+200 { "unit": "howen", "settings": [ { "key": "...", "value": "..." } ] }
+```
+
+#### `PUT /api/unit-types/{unit}/settings`
+Set one setting. `400` for an unknown key.
+```json
+// request
+{ "key": "...", "value": "..." }
+// 200
+{ "ok": true, "unit": "howen", "key": "..." }
+```
+
+#### `GET /api/unit-types/{unit}/ports`
+The unit's device port (and media port, for video units), plus the port currently
+bound (`*_active`) so a UI can flag a pending restart.
+```json
+200 { "unit": "howen", "has_video": true,
+  "device_port": "33000", "device_port_active": "33000",
+  "media_port": "33001", "media_port_active": "33001" }
+```
+
+#### `PUT /api/unit-types/{unit}/ports`
+Set `device_port` and/or `media_port` (1–65535; both optional). Applied on the
+next gateway restart. `media_port` is rejected for units without video.
+```json
+// request
+{ "device_port": 33000, "media_port": 33001 }
+// 200
+{ "ok": true, "unit": "howen" }
+```
+
+#### `PUT /api/unit-types/{unit}/capabilities`
+Disable/enable a feature the unit supports (`video`, `commands`, `config`,
+`status`; all optional). Enabling a feature the unit doesn't support returns `400`.
+```json
+// request
+{ "video": false }
+// 200
+{ "ok": true, "unit": "howen" }
 ```
 
 ### Telemetry webhooks
@@ -473,49 +577,13 @@ Powers the panel's event-code combobox.
   { "code": "AI:CELLPHONE", "category": "AI/DMS", "notes": "...", "device_notes": "" } ] }
 ```
 
-### Per-model mapping workflows
-
-The visual ("N8N-style") device-mapping method: a node graph per **model** that
-the gateway's flow engine evaluates to produce event codes. Strictly per
-`(unit, model)` — a device uses its own model's active workflow, or (if none) the
-flat code table. Saves fire the same instant-`NOTIFY` reload.
-
-The graph is `{ "nodes": [...], "edges": [...] }`. Node `type`s: `input` (one),
-`switch` (`data.field`; edges labelled `case:<v>` / `default`), `condition`
-(`data.{field,op,value}`; edges labelled `true` / `false`), `setEvent`
-(`data.event`), `setField` (`data.{key,value}`), `output`.
-
-#### `GET /api/workflows`
-List per-model workflow summaries for this unit.
-```json
-200 { "unit": "howen", "workflows": [
-  { "model": "Hero-MC30-02", "name": "phone demo", "is_active": true,
-    "node_count": 5, "edge_count": 4, "updated_at": "..." } ] }
-```
-
-#### `GET /api/workflows/{model}`
-One model's full workflow (graph included). `404` if the model has none.
-
-#### `PUT /api/workflows/{model}`
-Create or replace a model's workflow. The graph is validated (one input node,
-edges reference real nodes); an invalid graph returns `400`.
-```json
-{ "name": "phone demo", "is_active": true,
-  "graph": { "nodes": [ ... ], "edges": [ ... ] } }
-```
-
-#### `DELETE /api/workflows/{model}`
-Remove a model's workflow (it reverts to the code table). `404` if absent.
-
-#### `POST /api/workflows/test`
-Dry-run a graph against a sample payload (pure compute, no save). Powers the
-editor's test panel.
+### `POST /api/event-codes`
+Add a custom event code to the picklist. `code` is required.
 ```json
 // request
-{ "graph": { ... }, "payload": { "eventCode": 30, "detail": { "tp": 34 } } }
+{ "code": "AI:CUSTOM", "category": "AI/DMS", "notes": "..." }
 // 200
-{ "matched": true, "events": ["AI:PHONE_USE"], "fields": {},
-  "trace": ["in","sw","sw2","ev","out"] }
+{ "ok": true, "code": "AI:CUSTOM" }
 ```
 
 ## Howen command catalog

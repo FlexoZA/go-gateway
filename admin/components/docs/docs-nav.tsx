@@ -10,6 +10,10 @@ const sections = [
     links: [{ href: "/docs", label: "Overview" }],
   },
   {
+    title: "Reference",
+    links: [{ href: "/docs/api", label: "HTTP API" }],
+  },
+  {
     title: "Integrations",
     links: [{ href: "/docs/howen", label: "Howen" }],
   },

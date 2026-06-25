@@ -5,6 +5,11 @@ export const metadata = { title: "Docs" };
 
 const guides = [
   {
+    href: "/docs/api",
+    title: "HTTP API reference",
+    blurb: "Every endpoint, grouped by resource — method, path, and example request bodies.",
+  },
+  {
     href: "/docs/howen",
     title: "Howen integration",
     blurb:

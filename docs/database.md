@@ -47,22 +47,6 @@ WHERE unit = 'howen' AND map_type = 'dms_adas' AND code = 34;
 -- the running gateway picks this up within milliseconds
 ```
 
-### `mapping_workflows` — per-model visual workflows
-The alternative, "N8N-style" mapping method: a node graph **per model** that the
-flow engine (`internal/core/flow`) evaluates to produce event codes. Strictly per
-`(unit, model)` — no cross-model fallback; a model with no workflow uses the flat
-`event_mappings` table instead.
-
-```
-id PK, unit, model, name, graph JSONB, is_active, updated_at
-UNIQUE (unit, model)
-```
-
-Like `event_mappings`, a trigger fires `NOTIFY mapping_workflows_changed` on any
-change, so the gateway reloads the active set within milliseconds. The `graph` is
-the React Flow node/edge JSON; it is validated before storage and again on load,
-so a malformed graph can never take down mapping.
-
 ### `standard_event_codes` — event-code picklist
 The canonical ACM Standard Event Codes the admin panel offers when choosing an
 `event_code` (so mappings reference real codes, not typos). Seeded on startup
