@@ -38,6 +38,31 @@ jobs:
       - name: go test
         run: go test -race ./...
 
+  fuzz:
+    name: Fuzz decoders (short)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Each Fuzz* target runs against its seed corpus under `go test` already (in
+      # the Go job); here we also do a short active mutation pass per target to
+      # hunt for new panics on the binary decoders. A found crasher fails the job.
+      - name: fuzz decoders
+        run: |
+          set -euo pipefail
+          for pkg in ./internal/fleetiger ./internal/howen ./internal/cathexis; do
+            for fn in $(go test "$pkg" -list '^Fuzz' | grep '^Fuzz' || true); do
+              echo "::group::$pkg $fn"
+              go test "$pkg" -run='^$' -fuzz="^${fn}$" -fuzztime=30s
+              echo "::endgroup::"
+            done
+          done
+
   admin:
     name: Admin (typecheck · build)
     runs-on: ubuntu-latest

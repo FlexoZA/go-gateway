@@ -142,6 +142,7 @@ func defaultMappings() *Mappings {
 //     (SPEEDING/IDLING START-vs-END), 11/41/43/768 (parking/trip literals);
 //   - sub-table codes 12/15/28/30, which read their OWN map_type
 //     (vibration_direction/geofence_status/voltage/dms_adas), never event_code.
+//
 // These are not seeded as editable event_code rows, and any seeded by older
 // builds are pruned (see PrunableMappings), so the admin only shows event_code
 // rows that take effect. The sub-table map_types remain fully editable.
