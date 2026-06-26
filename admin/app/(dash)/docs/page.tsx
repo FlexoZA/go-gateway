@@ -15,6 +15,12 @@ const guides = [
     blurb:
       "Consume live GPS & events, device status, live video, and recorded clips from Howen devices over the HTTP API.",
   },
+  {
+    href: "/docs/cathexis",
+    title: "Cathexis integration",
+    blurb:
+      "Consume live GPS & events, device status, live video, and recorded clips from Cathexis MVR units over the HTTP API.",
+  },
 ];
 
 export default function DocsPage() {

@@ -15,7 +15,10 @@ const sections = [
   },
   {
     title: "Integrations",
-    links: [{ href: "/docs/howen", label: "Howen" }],
+    links: [
+      { href: "/docs/howen", label: "Howen" },
+      { href: "/docs/cathexis", label: "Cathexis" },
+    ],
   },
 ];
 
