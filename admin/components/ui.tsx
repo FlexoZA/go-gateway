@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 export function PageHeader({ title, subtitle, action }: { title: ReactNode; subtitle?: ReactNode; action?: ReactNode }) {
   return (
@@ -53,4 +53,69 @@ export function Empty({ children }: { children: ReactNode }) {
 
 export function Spinner() {
   return <div className="text-sm text-slate-400">Loading…</div>;
+}
+
+// ConfirmDialog is an in-app modal confirmation, replacing the browser's native
+// window.confirm. Controlled via `open`; the caller runs the action in onConfirm
+// and closes by flipping `open`. Clicking the backdrop or pressing Escape cancels
+// (disabled while `busy`).
+export function ConfirmDialog({
+  open,
+  title,
+  children,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  tone = "danger",
+  busy = false,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  children?: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  tone?: "danger" | "primary";
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, busy, onCancel]);
+
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={() => !busy && onCancel()}
+    >
+      <div
+        className="w-full max-w-md rounded-lg border border-edge bg-panel p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="text-base font-semibold text-white">{title}</h2>
+        {children && <div className="mt-2 text-sm text-slate-300">{children}</div>}
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="btn-ghost" onClick={onCancel} disabled={busy}>
+            {cancelLabel}
+          </button>
+          <button
+            className={tone === "danger" ? "btn-danger" : "btn-primary"}
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? "Working…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

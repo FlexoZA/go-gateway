@@ -5,7 +5,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
-import { Badge, Empty, ErrorBanner, PageHeader, Spinner, statusTone } from "@/components/ui";
+import { Badge, ConfirmDialog, Empty, ErrorBanner, PageHeader, Spinner, statusTone } from "@/components/ui";
 
 type Unit = {
   serial: string;
@@ -33,13 +33,14 @@ export default function DashboardPage() {
 
   const [stopping, setStopping] = useState(false);
   const [stopErr, setStopErr] = useState<string | null>(null);
-  async function stopAllStreams() {
-    if (!confirm(`Stop all ${streamCount} active live stream(s)? Any open live views will end.`)) return;
+  const [confirmStop, setConfirmStop] = useState(false);
+  async function doStopAll() {
     setStopping(true);
     setStopErr(null);
     try {
       await api("streams/stop-all", { method: "POST" });
       await streams.refresh();
+      setConfirmStop(false);
     } catch (e: any) {
       setStopErr(e.message || "Failed to stop streams");
     } finally {
@@ -54,13 +55,19 @@ export default function DashboardPage() {
         subtitle="Live connectivity and registry overview"
         action={
           streamCount > 0 ? (
-            <button className="btn-danger" onClick={stopAllStreams} disabled={stopping}>
-              {stopping ? "Stopping…" : `Stop all streams (${streamCount})`}
+            <button
+              className="btn-danger"
+              onClick={() => {
+                setStopErr(null);
+                setConfirmStop(true);
+              }}
+            >
+              {`Stop all streams (${streamCount})`}
             </button>
           ) : undefined
         }
       />
-      <ErrorBanner message={units.error || stopErr} />
+      <ErrorBanner message={units.error} />
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Connected now" value={connected.length} tone="green" badge="live" />
@@ -145,6 +152,26 @@ export default function DashboardPage() {
           </table>
         </div>
       )}
+      <ConfirmDialog
+        open={confirmStop}
+        title="Stop all live streams?"
+        confirmLabel={`Stop ${streamCount} stream${streamCount === 1 ? "" : "s"}`}
+        tone="danger"
+        busy={stopping}
+        onConfirm={doStopAll}
+        onCancel={() => {
+          setConfirmStop(false);
+          setStopErr(null);
+        }}
+      >
+        This stops every active live stream on the gateway. Anyone watching a live view
+        will be disconnected. Recorded clips are not affected.
+        {stopErr && (
+          <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-rose-200">
+            {stopErr}
+          </div>
+        )}
+      </ConfirmDialog>
     </div>
   );
 }
