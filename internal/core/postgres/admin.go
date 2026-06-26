@@ -246,6 +246,23 @@ func (s *Store) DeleteEventMapping(ctx context.Context, unit, model, mapType str
 	return nil
 }
 
+// PruneEventMappings deletes a unit's rows for a map_type and set of codes across
+// ALL models. Used at startup to remove seeded rows the unit no longer honors
+// (handled by built-in logic), so the admin's editable set stays accurate.
+// Returns the number of rows removed. A row change fires the NOTIFY reload.
+func (s *Store) PruneEventMappings(ctx context.Context, unit, mapType string, codes []int) (int64, error) {
+	if len(codes) == 0 {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM event_mappings WHERE unit = $1 AND map_type = $2 AND code = ANY($3)`,
+		unit, mapType, codes)
+	if err != nil {
+		return 0, fmt.Errorf("prune event mappings: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ListGatewayErrors returns recent system/server errors, newest first.
 func (s *Store) ListGatewayErrors(ctx context.Context, limit, offset int) ([]map[string]any, error) {
 	limit, offset = clampPage(limit, offset)

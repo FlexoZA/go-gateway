@@ -135,8 +135,37 @@ func defaultMappings() *Mappings {
 	}
 }
 
+// bypassedEventCodes are alarm codes that mapHowenEventCodes resolves with
+// built-in logic and never looks up in the editable event_code map, so editing
+// their event_code row would have no effect. They fall into two groups:
+//   - literal / dynamic outputs: 1 (channel video-loss), 7/27/48 & 32
+//     (SPEEDING/IDLING START-vs-END), 11/41/43/768 (parking/trip literals);
+//   - sub-table codes 12/15/28/30, which read their OWN map_type
+//     (vibration_direction/geofence_status/voltage/dms_adas), never event_code.
+// These are not seeded as editable event_code rows, and any seeded by older
+// builds are pruned (see PrunableMappings), so the admin only shows event_code
+// rows that take effect. The sub-table map_types remain fully editable.
+var bypassedEventCodes = []int{1, 7, 11, 12, 15, 27, 28, 30, 32, 41, 43, 48, 768}
+
+func isBypassedEventCode(code int) bool {
+	for _, c := range bypassedEventCodes {
+		if c == code {
+			return true
+		}
+	}
+	return false
+}
+
+// PrunableEventCodeMappings reports the event_code rows the howen unit handles
+// internally, for the runner to delete from databases seeded by older builds.
+func PrunableEventCodeMappings() []mapping.Prune {
+	return []mapping.Prune{{MapType: mapTypeEventCode, Codes: bypassedEventCodes}}
+}
+
 // DefaultMappingEntries flattens the built-in defaults for seeding the database.
-// Entries are emitted in a stable (map_type, code) order.
+// Entries are emitted in a stable (map_type, code) order. event_code rows for
+// codes the switch resolves internally (bypassedEventCodes) are omitted — they
+// would show as editable in the admin but have no effect.
 func DefaultMappingEntries() []mapping.Entry {
 	groups := []struct {
 		mapType string
@@ -158,6 +187,9 @@ func DefaultMappingEntries() []mapping.Entry {
 		}
 		sort.Ints(codes)
 		for _, code := range codes {
+			if g.mapType == mapTypeEventCode && isBypassedEventCode(code) {
+				continue // handled by built-in logic; not an editable row
+			}
 			entries = append(entries, mapping.Entry{MapType: g.mapType, Code: code, EventCode: g.m[code]})
 		}
 	}

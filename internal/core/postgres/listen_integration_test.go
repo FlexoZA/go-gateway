@@ -72,6 +72,54 @@ func TestListenDoesNotStarvePool(t *testing.T) {
 	}
 }
 
+// TestPruneEventMappingsLive verifies the prune DELETE (… code = ANY($3) with a
+// Go []int) against a real database: a bypassed code is removed, an honored one
+// is kept. Skipped without DATABASE_URL.
+func TestPruneEventMappingsLive(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping live-DB integration test")
+	}
+	ctx := context.Background()
+	s, err := New(ctx, dsn, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const unit = "prunetest"
+	if _, err := s.pool.Exec(ctx, `DELETE FROM event_mappings WHERE unit=$1`, unit); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.pool.Exec(context.Background(), `DELETE FROM event_mappings WHERE unit=$1`, unit) })
+
+	for _, r := range []struct {
+		code int
+		ev   string
+	}{{41, "TRIP:START"}, {19, "IGNITION:OFF"}} {
+		if _, err := s.pool.Exec(ctx,
+			`INSERT INTO event_mappings(unit,model,map_type,code,event_code) VALUES($1,'','event_code',$2,$3)`,
+			unit, r.code, r.ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	n, err := s.PruneEventMappings(ctx, unit, "event_code", []int{41})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("pruned %d rows, want 1", n)
+	}
+
+	var c41, c19 int
+	s.pool.QueryRow(ctx, `SELECT count(*) FROM event_mappings WHERE unit=$1 AND code=41`, unit).Scan(&c41)
+	s.pool.QueryRow(ctx, `SELECT count(*) FROM event_mappings WHERE unit=$1 AND code=19`, unit).Scan(&c19)
+	if c41 != 0 || c19 != 1 {
+		t.Fatalf("after prune: bypassed code 41 count=%d (want 0), honored code 19 count=%d (want 1)", c41, c19)
+	}
+}
+
 func drain(ch <-chan string) {
 	for {
 		select {

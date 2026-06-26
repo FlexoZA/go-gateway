@@ -114,6 +114,15 @@ type MappingProvider interface {
 	ApplyMappings(mapping.ByModel)
 }
 
+// MappingPruner is an optional MappingProvider extension. PrunableMappings lists
+// editable rows the unit handles with built-in logic and never reads from the
+// DB; the runner deletes any that older builds seeded so the admin only shows
+// rows that actually take effect. A provider that implements it is detected via
+// type assertion; one that doesn't keeps every seeded row.
+type MappingPruner interface {
+	PrunableMappings() []mapping.Prune
+}
+
 // MediaListener is a device-side media accept loop (a separate TCP port from the
 // control server) that a video-capable unit runs to receive video frames.
 type MediaListener interface {

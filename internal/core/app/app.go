@@ -488,6 +488,18 @@ func (a *App) effectiveCapabilities(u *unitRuntime) gateway.EffectiveCapabilitie
 func (a *App) seedAndLoadMappings(ctx context.Context, u *unitRuntime) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	// Drop rows the unit no longer honors (handled by built-in logic) that older
+	// builds seeded, so the admin only shows mappings that take effect.
+	if pruner, ok := u.mp.(gateway.MappingPruner); ok {
+		for _, p := range pruner.PrunableMappings() {
+			n, err := a.store.PruneEventMappings(cctx, u.name, p.MapType, p.Codes)
+			if err != nil {
+				a.log.Error(map[string]any{"event": "mapping_prune_failed", "unit": u.name, "map_type": p.MapType, "error": err.Error()})
+			} else if n > 0 {
+				a.log.Info(map[string]any{"event": "mappings_pruned", "unit": u.name, "map_type": p.MapType, "rows": n})
+			}
+		}
+	}
 	if err := a.store.SeedEventMappings(cctx, u.name, u.mp.DefaultMappingEntries()); err != nil {
 		a.log.Error(map[string]any{"event": "mapping_seed_failed", "unit": u.name, "error": err.Error()})
 	}

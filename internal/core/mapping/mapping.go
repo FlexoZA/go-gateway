@@ -22,3 +22,12 @@ type Table map[string]map[int]string
 // ByModel is a unit's mappings grouped by device model: model -> Table. The empty
 // model key ("") is the unit-wide default.
 type ByModel map[string]Table
+
+// Prune names editable rows a unit no longer honors — codes it resolves with
+// built-in logic and never reads from the editable table. The runner deletes any
+// such rows older builds seeded, so the admin's editable set stays limited to
+// rows that actually take effect.
+type Prune struct {
+	MapType string
+	Codes   []int
+}

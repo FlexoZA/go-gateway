@@ -164,8 +164,10 @@ case a notification is missed on a dropped connection. The built-in maps remain
 the fallback if a `map_type` is empty or the database is unavailable.
 
 Howen `map_type`s: `event_code`, `dms_adas`, `vibration_direction`,
-`geofence_status`, `voltage`, `input`, `media_alarm_subtype`. Edit a mapping with
-e.g.:
+`geofence_status`, `voltage`, `input`, `media_alarm_subtype`. Some `event_code`
+codes (trip/speeding/parking/idling and the sub-table codes) are resolved by
+built-in logic and aren't editable rows — they're not seeded, so the admin only
+lists `event_code` rows that take effect. Edit a mapping with e.g.:
 
 ```sql
 UPDATE event_mappings SET event_code = 'AI:PHONE_USE'

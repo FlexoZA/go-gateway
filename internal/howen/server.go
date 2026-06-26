@@ -57,6 +57,10 @@ func (*Protocol) DefaultDevicePort() int { return 33000 }
 func (*Protocol) DefaultMappingEntries() []mapping.Entry { return DefaultMappingEntries() }
 func (*Protocol) ApplyMappings(byModel mapping.ByModel)  { ApplyMappings(byModel) }
 
+// MappingPruner: drop event_code rows the switch resolves internally so the admin
+// only shows rows that take effect (cleans DBs seeded by older builds).
+func (*Protocol) PrunableMappings() []mapping.Prune { return PrunableEventCodeMappings() }
+
 // ReadFrame decodes one H-Protocol frame from the stream.
 func (*Protocol) ReadFrame(r *bufio.Reader) (gateway.Frame, error) {
 	var header [howenHeaderSize]byte
