@@ -239,6 +239,10 @@ var schema = []string{
 // registry); it is NOT a telemetry sink.
 type Store struct {
 	pool *pgxpool.Pool
+	// listenCfg is a standalone connection config (derived from the pool's DSN)
+	// for opening DEDICATED LISTEN/NOTIFY connections. Long-lived LISTEN
+	// connections must not come from the query pool — see listenChannel.
+	listenCfg *pgx.ConnConfig
 	// rejectUnknown mirrors the old Supabase gate: when true, a serial absent
 	// from `devices` is quarantined and rejected. When false (default), unknown
 	// serials are auto-provisioned and admitted. It is an atomic so it can be
@@ -255,7 +259,11 @@ func (s *Store) RejectUnknown() bool { return s.rejectUnknown.Load() }
 
 // New connects to PostgreSQL, applies the schema, and returns the store.
 func New(ctx context.Context, dsn string, rejectUnknown bool) (*Store, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("postgres parse dsn: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("postgres connect: %w", err)
 	}
@@ -263,7 +271,10 @@ func New(ctx context.Context, dsn string, rejectUnknown bool) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("postgres ping: %w", err)
 	}
-	s := &Store{pool: pool}
+	// Derive a standalone (non-pool) connection config for LISTEN/NOTIFY. pgxpool
+	// has already stripped pool_* params into cfg, so ConnConfig is a clean
+	// single-connection config.
+	s := &Store{pool: pool, listenCfg: cfg.ConnConfig.Copy()}
 	s.rejectUnknown.Store(rejectUnknown)
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()
@@ -382,17 +393,21 @@ func (s *Store) ListenForMappingChanges(ctx context.Context, onChange func(unit 
 	}
 }
 
-// listenChannel hijacks a pooled connection, LISTENs on the given channel, calls
-// onChange once on connect (resync) and again on every notification. Returns on
-// error so the caller can reconnect. Shared by the mapping/settings channels.
+// listenChannel opens a DEDICATED connection (not from the query pool) and
+// LISTENs on the given channel, calling onChange once on connect (resync) and
+// again on every notification. Returns on error so the caller can reconnect.
+//
+// It must not borrow from the pool: a LISTEN connection lives for the whole
+// process, and there are many listeners — per-unit mappings and per-unit
+// settings plus the global webhooks/server-settings channels — so with several
+// units (e.g. howen + fleetiger + cathexis) hijacking pool connections would
+// shrink the query pool well below its modest default and could starve device
+// authorization. A standalone connection keeps the pool fully available.
 func (s *Store) listenChannel(ctx context.Context, channel string, onChange func(payload string)) error {
-	pooled, err := s.pool.Acquire(ctx)
+	conn, err := pgx.ConnectConfig(ctx, s.listenCfg)
 	if err != nil {
 		return err
 	}
-	// Hijack removes the connection from the pool — we own it for the lifetime of
-	// this LISTEN and must close it ourselves.
-	conn := pooled.Hijack()
 	defer conn.Close(context.Background())
 
 	if _, err := conn.Exec(ctx, "LISTEN "+channel); err != nil {
