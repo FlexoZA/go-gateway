@@ -7,6 +7,7 @@ import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
 import { deviceConfigSchema } from "@/lib/deviceConfig";
 import { Badge, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 import { DeviceConfig } from "@/components/DeviceConfig";
+import { DeviceVideo } from "@/components/DeviceVideo";
 
 type Conn = {
   serial: string;
@@ -30,15 +31,21 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
   const tele = status.data?.telemetry;
   const reg = devices.data?.devices?.find((d) => d.serial === serial);
   const online = !!conn;
-  const state = conn?.state === "sleep" ? "standby" : online ? "online" : reg?.status || "offline";
-  const [tab, setTab] = useState<"status" | "config">("status");
+  const sleeping = conn?.state === "sleep";
+  const canWake = !!conn?.commands?.includes("wake_device");
+  const state = sleeping ? "standby" : online ? "online" : reg?.status || "offline";
+  type Tab = "status" | "config" | "video";
+  const [tab, setTab] = useState<Tab>("status");
   // The Config tab only exists when THIS device's unit type supports parameter
-  // config AND the admin has a config schema for it (different units have different
-  // config screens; a GPS-only unit has none).
+  // config AND the admin has a config screen for it; the Video tab only when the
+  // unit type supports video (a GPS-only unit has neither).
   const info = useGatewayInfo();
   const unitType = conn?.protocol || reg?.protocol;
-  const hasConfig = !!capsForUnit(info, unitType)?.has_config && !!deviceConfigSchema(unitType);
-  const tabs: ("status" | "config")[] = hasConfig ? ["status", "config"] : ["status"];
+  const unitCaps = capsForUnit(info, unitType);
+  const hasConfig = !!unitCaps?.has_config && !!deviceConfigSchema(unitType);
+  const hasVideo = !!unitCaps?.has_video;
+  const hasClips = !!unitCaps?.has_clips;
+  const tabs: Tab[] = ["status", ...(hasConfig ? (["config"] as const) : []), ...(hasVideo ? (["video"] as const) : [])];
 
   return (
     <div>
@@ -68,8 +75,8 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
               className={`-mb-px border-b-2 px-4 py-2 text-sm capitalize ${
                 tab === t ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"
               }`}
-              disabled={t === "config" && !online}
-              title={t === "config" && !online ? "Connect the device to edit its configuration" : undefined}
+              disabled={(t === "config" || t === "video") && !online}
+              title={(t === "config" || t === "video") && !online ? "Connect the device to use this tab" : undefined}
             >
               {t}
             </button>
@@ -83,6 +90,14 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
         ) : (
           <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
             The device must be connected to read or edit its configuration.
+          </div>
+        )
+      ) : hasVideo && tab === "video" ? (
+        online ? (
+          <DeviceVideo serial={serial} hasClips={hasClips} sleeping={sleeping} canWake={canWake} />
+        ) : (
+          <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
+            The device must be connected to stream video or pull clips.
           </div>
         )
       ) : (
