@@ -145,6 +145,14 @@ export default function HowenDocsPage() {
         <Link href="/device-mapping">Device Mapping</Link> page, and the canonical event-name
         picklist is available at <code>GET /api/event-codes</code>.
       </Callout>
+      <Callout tone="info" title="OBD / datahub telemetry">
+        Vehicles with a CAN/OBD datahub emit a periodic status frame that the gateway forwards as a{" "}
+        <code>message_type: "gps"</code> message (it is telemetry, not an alarm) — the OBD fields land
+        in <code>sensors</code> (e.g. <code>engine_rpm</code>, <code>obd_speed</code>,{" "}
+        <code>coolant_temp_c</code>, <code>fuel_level</code>, <code>obd_distance</code>) plus the
+        device&rsquo;s <code>inputs</code>/<code>outputs</code> bit strings. The raw block is preserved
+        under <code>howen_datahub</code>.
+      </Callout>
 
       {/* ---------------------------------------------------------------- */}
       <h2 id="status">Device status</h2>
@@ -292,6 +300,41 @@ GET /api/clips/{id}/download   →   a 15-second .mp4`}</CodeBlock>
         device&rsquo;s local wall-clock, so the gateway localizes the window using its{" "}
         <code>DEVICE_TZ_OFFSET</code>. If that offset is wrong, a window won&rsquo;t match any file —
         always confirm against <code>/recordings</code> first.
+      </Callout>
+
+      {/* ---------------------------------------------------------------- */}
+      <h2 id="snapshots">Snapshots</h2>
+      <Callout tone="warn">
+        Snapshots need video enabled (<code>MEDIA_ADVERTISE_HOST</code>) — the device uploads the
+        captured file over the media port. A device in standby returns <code>409 device_sleeping</code>.
+      </Callout>
+      <p>
+        There are two ways to grab a still. Use <strong>capture-and-fetch</strong> when you just want
+        the image back; use <strong>capture-only</strong> when you only need the device to take the
+        photo (it writes the JPEG to its SD card and reports the path).
+      </p>
+
+      <h3>Capture &amp; fetch the JPEG (one call)</h3>
+      <Endpoint method="POST" path="/api/units/{serial}/snapshot/image?camera=0&resolution=0">
+        Capture a still on one camera and return the JPEG inline. The gateway triggers the capture
+        (<code>0x4020</code>), then pulls the file back over the device&rsquo;s media port
+        (file-transfer <code>0x4090</code>). <code>camera</code> is 0-based (default <code>0</code>);{" "}
+        <code>resolution</code> is <code>0</code> follow-video, <code>1</code> 1080p, <code>2</code>{" "}
+        720p, <code>3</code> VGA, <code>4</code> D1.
+      </Endpoint>
+      <CodeBlock label="200 OK">{`Content-Type: image/jpeg   (binary JPEG body)`}</CodeBlock>
+
+      <h3>Capture only (device file paths)</h3>
+      <Endpoint method="POST" path="/api/units/{serial}/snapshots">
+        Capture stills on one or more cameras and return the device-side file paths (no image bytes).
+        Body: <code>{`{ "channels": [0], "resolution": 0 }`}</code> — <code>channels</code> are 0-based
+        (default <code>[0]</code>).
+      </Endpoint>
+      <CodeBlock label="200 OK">{`{ "ok": true, "session_id": "snap_…",
+  "files": [ { "channel": 1, "device_path": "/mnt/sd1/picture/Pic….jpg" } ] }`}</CodeBlock>
+      <Callout tone="info">
+        The reported <code>channel</code> is 1-based (the H-Protocol channel = camera + 1), so camera{" "}
+        <code>0</code> comes back as channel <code>1</code>.
       </Callout>
 
       <hr />

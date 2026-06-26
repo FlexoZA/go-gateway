@@ -167,13 +167,14 @@ the panel) include `WIFI DIALUP SERVER ROAMING CLOCK DST POWER RECORD DISPLAY OS
 MASK Privacy IOSET SPEED GSENSOR MOTIONDETECT ACC VOLTAGE PTZ LANGUAGE JTBASE
 UPGRADE VERSIONINFO`.
 
-## Video, recordings & clips
+## Video, recordings, clips & snapshots
 
 Live video is HLS produced by ffmpeg; clips are `.mp4` files pulled from the
-device's SD card and stored server-side under `CLIPS_ROOT` (the "bucket"). All
-video routes require the gateway to have video enabled (`MEDIA_ADVERTISE_HOST`
-set) — otherwise they return `503 { "error": "… not enabled" }`. A unit in
-standby returns `409 device_sleeping`.
+device's SD card and stored server-side under `CLIPS_ROOT` (the "bucket");
+snapshots are single JPEG stills captured on demand. All video routes require the
+gateway to have video enabled (`MEDIA_ADVERTISE_HOST` set) — otherwise they
+return `503 { "error": "… not enabled" }`. A unit in standby returns
+`409 device_sleeping`.
 
 ### `POST /api/units/{serial}/stream/start`
 Begin a live stream. ffmpeg writes the HLS playlist a few seconds after the device
@@ -243,6 +244,33 @@ clip isn't `ready`; `404` if the file is missing or storage isn't configured.
 
 ### `DELETE /api/clips/{id}`
 Remove the clip record and its file. `200 { "ok": true }` / `404` if absent.
+
+### `POST /api/units/{serial}/snapshots`
+Ask the device to capture a still image on one or more cameras (H-Protocol
+`0x4020`). The device writes the JPEG(s) to its SD card and returns the **file
+paths** — it does not return the image bytes (use `/snapshot/image` for that).
+
+```json
+// request — channels are 0-based camera indexes (default [0]).
+// resolution: 0 follow-video, 1 1080p, 2 720p, 3 VGA, 4 D1
+{ "channels": [0], "resolution": 0 }
+// 200
+{ "ok": true, "session_id": "snap_…",
+  "files": [ { "channel": 1, "device_path": "/mnt/sd1/picture/Pic….jpg" } ] }
+```
+
+### `POST /api/units/{serial}/snapshot/image?camera=0&resolution=0`
+Capture a still on one camera **and** fetch the JPEG back inline: the gateway
+triggers the capture, then pulls the file over the device's media port
+(file-transfer `0x4090`). Query params `camera` (0-based, default 0) and
+`resolution` (as above). Responds with the raw image:
+
+```
+200  Content-Type: image/jpeg   (binary JPEG body)
+```
+
+Needs video/media enabled (`MEDIA_ADVERTISE_HOST`); a unit in standby returns
+`409 device_sleeping`, and a capture/transfer failure returns `502`.
 
 ## Admin endpoints
 
@@ -609,8 +637,8 @@ Add a custom event code to the picklist. `code` is required.
 The per-device list is also returned in each unit's `commands` field, so a front
 end can render exactly what a given device accepts.
 
-Live video, recorded clips, and read/write device configuration are **not** part
-of this command catalog — they have their own dedicated routes (see
+Live video, recorded clips, snapshots, and read/write device configuration are
+**not** part of this command catalog — they have their own dedicated routes (see
 [Device configuration](#device-configuration) and
 [Video, recordings & clips](#video-recordings--clips) above).
 

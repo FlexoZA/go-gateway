@@ -33,9 +33,10 @@ external database that stores all GPS and event data. The gateway's own
 connecting devices), server settings, event mappings, users, API keys, and clip
 metadata; no telemetry is stored there.
 
-**Howen** (GPS + events, live video, recorded clips, device config & status) is
-the reference for a full-featured plugin; **Fleetiger** (a GT06-style GPS
-tracker) and **Cathexis** (MVR video + config) are the other implemented units.
+**Howen** (GPS + events, OBD/datahub telemetry, live video, recorded clips,
+snapshots, device config & status) is the reference for a full-featured plugin;
+**Fleetiger** (a GT06-style GPS tracker) and **Cathexis** (MVR video + config)
+are the other implemented units.
 
 ## Documentation
 
@@ -359,8 +360,10 @@ message golden parity test (`internal/core/message`).
   accounts and editable event mappings.
 - **Milestone 2 (done):** Howen video/media behind `Capabilities.HasVideo` —
   live HLS via ffmpeg, recorded-clip ingest to server-side storage (`CLIPS_ROOT`),
+  on-demand snapshots (capture `0x4020` + file-transfer `0x4090` image fetch),
   footage/recordings query, live device status, and full device configuration
-  (read/write all parameter segments) from the admin panel.
+  (read/write all parameter segments) from the admin panel. Datahub/OBD frames
+  (ec 771) are forwarded as `gps` telemetry with CAN/OBD values in `sensors`.
 - **Milestone 3 (in progress):** additional unit types via the scaffold —
   **Fleetiger** (GT06-style GPS) and **Cathexis** (MVR video + config) are wired
   into the multi-unit gateway.
