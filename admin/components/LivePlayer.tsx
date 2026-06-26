@@ -10,7 +10,7 @@ type State = "idle" | "starting" | "live" | "error";
 // LivePlayer starts a live HLS stream for a device camera and plays it with
 // hls.js. The .m3u8 + .ts are fetched through the BFF (/api/gw/hls/...), so the
 // player stays authenticated by the session cookie.
-export function LivePlayer({ serial }: { serial: string }) {
+export function LivePlayer({ serial, disabled = false }: { serial: string; disabled?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const [camera, setCamera] = useState(0);
@@ -151,7 +151,12 @@ export function LivePlayer({ serial }: { serial: string }) {
               Stop
             </button>
           ) : (
-            <button className="btn-primary" onClick={start}>
+            <button
+              className="btn-primary"
+              onClick={start}
+              disabled={disabled}
+              title={disabled ? "Device is in standby — wake it to stream" : undefined}
+            >
               Start stream
             </button>
           )}

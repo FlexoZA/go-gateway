@@ -15,24 +15,22 @@ export function DeviceVideo({
   serial,
   hasClips,
   sleeping,
-  canWake,
 }: {
   serial: string;
   hasClips: boolean;
   sleeping: boolean;
-  canWake: boolean;
 }) {
   return (
     <div className="space-y-8">
       <section>
         <h3 className="mb-3 text-sm font-semibold text-slate-300">Live stream</h3>
-        <LivePlayer serial={serial} />
+        <LivePlayer serial={serial} disabled={sleeping} />
       </section>
 
       {hasClips && (
         <section>
           <h3 className="mb-3 text-sm font-semibold text-slate-300">Recorded clips</h3>
-          <DeviceClips serial={serial} sleeping={sleeping} canWake={canWake} />
+          <DeviceClips serial={serial} sleeping={sleeping} />
         </section>
       )}
     </div>
@@ -66,7 +64,7 @@ type Clip = {
 const MAX_CLIP_SECS = 300;
 const MIN_CLIP_SECS = 5;
 
-function DeviceClips({ serial, sleeping, canWake }: { serial: string; sleeping: boolean; canWake: boolean }) {
+function DeviceClips({ serial, sleeping }: { serial: string; sleeping: boolean }) {
   const range = defaultRange();
   // Stored clips for THIS device only (server-side filter), polled so status updates.
   const clips = useFetch<{ clips: Clip[] }>(`clips?serial=${encodeURIComponent(serial)}`, 4000);
@@ -78,7 +76,6 @@ function DeviceClips({ serial, sleeping, canWake }: { serial: string; sleeping: 
   const [searching, setSearching] = useState(false);
   const [recordings, setRecordings] = useState<Recording[] | null>(null);
   const [requesting, setRequesting] = useState<string | null>(null);
-  const [waking, setWaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -99,23 +96,6 @@ function DeviceClips({ serial, sleeping, canWake }: { serial: string; sleeping: 
     setLengthSecs(Math.min(30, len));
     setError(null);
     setNotice(null);
-  }
-
-  async function wake() {
-    setWaking(true);
-    setError(null);
-    setNotice(null);
-    try {
-      await api(`units/${encodeURIComponent(serial)}/commands`, {
-        method: "POST",
-        body: JSON.stringify({ type: "wake_device" }),
-      });
-      setNotice("Wake sent. Give the device a few seconds to come out of standby, then search again.");
-    } catch (e: any) {
-      setError(e.message || "Failed to wake device");
-    } finally {
-      setWaking(false);
-    }
   }
 
   async function findRecordings() {
@@ -183,19 +163,6 @@ function DeviceClips({ serial, sleeping, canWake }: { serial: string; sleeping: 
           {notice}
         </div>
       )}
-      {sleeping && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-          <span>
-            ⚠ This device is in <strong>standby</strong> — it won&apos;t return recordings or clips until woken.
-          </span>
-          {canWake && (
-            <button className="btn-primary" onClick={wake} disabled={waking}>
-              {waking ? "Waking…" : "Wake device"}
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Step 1: search this device for available recordings */}
       <div className="card mb-6 space-y-3">
         <div className="flex flex-wrap items-end gap-3">
@@ -221,7 +188,12 @@ function DeviceClips({ serial, sleeping, canWake }: { serial: string; sleeping: 
             <label className="text-xs text-slate-400">To</label>
             <input type="datetime-local" className="input mt-1" value={end} onChange={(e) => setEnd(e.target.value)} disabled={searching} />
           </div>
-          <button className="btn-primary" onClick={findRecordings} disabled={searching}>
+          <button
+            className="btn-primary"
+            onClick={findRecordings}
+            disabled={searching || sleeping}
+            title={sleeping ? "Device is in standby — wake it to search recordings" : undefined}
+          >
             {searching ? "Searching…" : "Find recordings"}
           </button>
         </div>

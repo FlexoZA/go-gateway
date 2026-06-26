@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
 import { deviceConfigSchema } from "@/lib/deviceConfig";
@@ -47,6 +48,26 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
   const hasClips = !!unitCaps?.has_clips;
   const tabs: Tab[] = ["status", ...(hasConfig ? (["config"] as const) : []), ...(hasVideo ? (["video"] as const) : [])];
 
+  // Waking a standby device (Howen): the banner's button sends wake_device; the
+  // 5s status poll then reflects the device coming online.
+  const [waking, setWaking] = useState(false);
+  const [wakeErr, setWakeErr] = useState<string | null>(null);
+  async function wake() {
+    setWaking(true);
+    setWakeErr(null);
+    try {
+      await api(`units/${encodeURIComponent(serial)}/commands`, {
+        method: "POST",
+        body: JSON.stringify({ type: "wake_device" }),
+      });
+      await status.refresh();
+    } catch (e: any) {
+      setWakeErr(e.message || "Failed to wake device");
+    } finally {
+      setWaking(false);
+    }
+  }
+
   return (
     <div>
       <PageHeader
@@ -84,6 +105,22 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
         </div>
       )}
 
+      {/* Standby banner — shown on every tab except Config (which has its own
+          wake affordance in the config editor). */}
+      {sleeping && tab !== "config" && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+          <span>
+            ⚠ This device is in <strong>standby</strong> — wake it to get live status, stream video, or pull clips.
+          </span>
+          {canWake && (
+            <button className="btn-primary" onClick={wake} disabled={waking}>
+              {waking ? "Waking…" : "Wake device"}
+            </button>
+          )}
+          {wakeErr && <span className="text-rose-300">{wakeErr}</span>}
+        </div>
+      )}
+
       {hasConfig && tab === "config" ? (
         online ? (
           <DeviceConfig serial={serial} unit={unitType!} />
@@ -94,7 +131,7 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
         )
       ) : hasVideo && tab === "video" ? (
         online ? (
-          <DeviceVideo serial={serial} hasClips={hasClips} sleeping={sleeping} canWake={canWake} />
+          <DeviceVideo serial={serial} hasClips={hasClips} sleeping={sleeping} />
         ) : (
           <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
             The device must be connected to stream video or pull clips.
