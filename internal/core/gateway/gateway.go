@@ -453,8 +453,25 @@ func (s *Server) handle(ctx context.Context, raw net.Conn) {
 	defer sess.OnClose(ctx)
 	defer raw.Close()
 
+	// Promptly unblock the read loop on shutdown. An idle connection otherwise
+	// blocks in ReadFrame until its read deadline (up to idleTimeout — minutes),
+	// stalling graceful shutdown's wg.Wait(). The watcher, tied to a child of ctx,
+	// expires the read deadline the instant ctx is cancelled; on a normal handle()
+	// return cancelWatch fires first, so it does nothing and never leaks.
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	defer cancelWatch()
+	go func() {
+		<-watchCtx.Done()
+		if ctx.Err() != nil { // real shutdown, not a normal return
+			_ = raw.SetReadDeadline(time.Now())
+		}
+	}()
+
 	r := bufio.NewReader(raw)
 	for {
+		if ctx.Err() != nil { // shutdown: don't block on another read
+			return
+		}
 		if s.idleTimeout > 0 {
 			_ = raw.SetReadDeadline(time.Now().Add(s.idleTimeout))
 		}
@@ -463,7 +480,11 @@ func (s *Server) handle(ctx context.Context, raw net.Conn) {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				log.Debug(map[string]any{"event": "peer_closed"})
 			} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				log.Debug(map[string]any{"event": "idle_timeout"})
+				if ctx.Err() != nil {
+					log.Debug(map[string]any{"event": "shutdown"})
+				} else {
+					log.Debug(map[string]any{"event": "idle_timeout"})
+				}
 			} else {
 				log.Debug(map[string]any{"event": "read_error", "error": err.Error()})
 			}
