@@ -9,8 +9,10 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -316,12 +318,28 @@ func (c *Conn) Emit(serial, make, model, msgType string, payload map[string]any)
 	for _, sink := range c.Deps.Sinks {
 		sink := sink
 		go func() {
+			defer recoverGo(log, "emit_sink")
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			if err := sink.Consume(ctx, in, msg); err != nil {
 				log.Debug(map[string]any{"event": "sink_error", "type": msgType, "error": err.Error()})
 			}
 		}()
+	}
+}
+
+// recoverGo contains a panic in a fire-and-forget goroutine spawned off the read
+// loop (a sink Consume, a device-error write). Without it such a panic crashes
+// the whole process and every co-hosted unit with it. The Error log is persisted
+// to gateway_errors. Mirrors the per-connection recover in handle().
+func recoverGo(log *logging.Logger, where string) {
+	if r := recover(); r != nil {
+		log.Error(map[string]any{
+			"event": "panic_recovered",
+			"where": where,
+			"panic": fmt.Sprint(r),
+			"stack": string(debug.Stack()),
+		})
 	}
 }
 
@@ -338,6 +356,7 @@ func (c *Conn) EmitDeviceError(serial, category, message string, raw []byte) {
 	remoteAddr, remotePort := c.RemoteIP(), c.RemotePort()
 	log := c.Deps.Log
 	go func() {
+		defer recoverGo(log, "device_error")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := rec.RecordDeviceError(ctx, serial, category, message, remoteAddr, remotePort, raw); err != nil {
@@ -404,6 +423,24 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 }
 
 func (s *Server) handle(ctx context.Context, raw net.Conn) {
+	// Contain a panic to this one connection. ReadFrame/OnFrame run on
+	// device-supplied bytes, and one process now hosts several unit types — an
+	// unhandled panic here would otherwise crash the process and take down every
+	// other unit's listener too. Registered first so it runs last, after the
+	// OnClose/raw.Close defers below have unwound. The Error log is also persisted
+	// to gateway_errors for visibility.
+	defer func() {
+		if r := recover(); r != nil {
+			s.deps.Log.Error(map[string]any{
+				"event":  "panic_recovered",
+				"unit":   s.proto.Name(),
+				"remote": raw.RemoteAddr().String(),
+				"panic":  fmt.Sprint(r),
+				"stack":  string(debug.Stack()),
+			})
+		}
+	}()
+
 	if tcp, ok := raw.(*net.TCPConn); ok {
 		_ = tcp.SetKeepAlive(true)
 		_ = tcp.SetKeepAlivePeriod(30 * time.Second)
