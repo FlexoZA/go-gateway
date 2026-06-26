@@ -1,10 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { gatewayConfigured, gatewayFetch } from "@/lib/gateway";
+import { sessionFromRequest } from "@/lib/session";
 
 // BFF proxy: every browser call to /api/gw/<path> is forwarded to the gateway's
-// /api/<path> with the server-held API key attached. The session is already
-// enforced by middleware, so reaching here means the caller is authenticated.
+// /api/<path> with the server-held API key attached. Middleware enforces the
+// session, but we re-check it here so a middleware bypass can never reach the
+// gateway with the service token (defense in depth — see sessionFromRequest).
 async function handle(req: NextRequest, ctx: { params: { path?: string[] } }) {
+  if (!(await sessionFromRequest(req))) {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+
   if (!gatewayConfigured()) {
     return NextResponse.json({ error: "gateway API key not configured" }, { status: 503 });
   }

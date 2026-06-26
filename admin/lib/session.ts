@@ -43,3 +43,15 @@ export async function verifySession(token: string): Promise<JWTPayload | null> {
     return null;
   }
 }
+
+// Verify the session straight from a request's cookie. Middleware already gates
+// every route, but the secret-forwarding proxies (/api/gw, /api/console) call
+// this too so a middleware bypass (e.g. CVE-2025-29927's x-middleware-subrequest
+// header) can't reach the gateway with the service token. Defense in depth — do
+// not remove.
+export async function sessionFromRequest(
+  req: { cookies: { get(name: string): { value: string } | undefined } },
+): Promise<JWTPayload | null> {
+  const token = req.cookies.get(SESSION_COOKIE)?.value;
+  return token ? verifySession(token) : null;
+}

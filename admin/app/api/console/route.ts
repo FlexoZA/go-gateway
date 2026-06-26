@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { gatewayConfigured, gatewayFetch } from "@/lib/gateway";
+import { sessionFromRequest } from "@/lib/session";
 
 // Dedicated proxy for the API Console. Unlike /api/gw/[...path] (which mirrors a
 // single URL path), this accepts a full request *spec* in the POST body so the
@@ -50,6 +51,12 @@ const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"
 
 export async function POST(req: NextRequest) {
   const startedAt = new Date().toISOString();
+
+  // Re-verify the session here too: middleware already gates this route, but the
+  // service token is attached below, so a middleware bypass must not get through.
+  if (!(await sessionFromRequest(req))) {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
 
   let spec: ConsoleSpec;
   try {
