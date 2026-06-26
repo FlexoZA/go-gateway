@@ -9,6 +9,7 @@ import { deviceConfigSchema } from "@/lib/deviceConfig";
 import { Badge, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 import { DeviceConfig } from "@/components/DeviceConfig";
 import { DeviceVideo } from "@/components/DeviceVideo";
+import { DeviceSnapshots } from "@/components/DeviceSnapshots";
 
 type Conn = {
   serial: string;
@@ -35,7 +36,7 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
   const sleeping = conn?.state === "sleep";
   const canWake = !!conn?.commands?.includes("wake_device");
   const state = sleeping ? "standby" : online ? "online" : reg?.status || "offline";
-  type Tab = "status" | "config" | "video";
+  type Tab = "status" | "config" | "video" | "snapshots";
   const [tab, setTab] = useState<Tab>("status");
   // The Config tab only exists when THIS device's unit type supports parameter
   // config AND the admin has a config screen for it; the Video tab only when the
@@ -46,7 +47,11 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
   const hasConfig = !!unitCaps?.has_config && !!deviceConfigSchema(unitType);
   const hasVideo = !!unitCaps?.has_video;
   const hasClips = !!unitCaps?.has_clips;
-  const tabs: Tab[] = ["status", ...(hasConfig ? (["config"] as const) : []), ...(hasVideo ? (["video"] as const) : [])];
+  const tabs: Tab[] = [
+    "status",
+    ...(hasConfig ? (["config"] as const) : []),
+    ...(hasVideo ? (["video", "snapshots"] as const) : []),
+  ];
 
   // Waking a standby device (Howen): the banner's button sends wake_device; the
   // 5s status poll then reflects the device coming online.
@@ -96,8 +101,12 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
               className={`-mb-px border-b-2 px-4 py-2 text-sm capitalize ${
                 tab === t ? "border-indigo-500 text-white" : "border-transparent text-slate-400 hover:text-slate-200"
               }`}
-              disabled={(t === "config" || t === "video") && !online}
-              title={(t === "config" || t === "video") && !online ? "Connect the device to use this tab" : undefined}
+              disabled={(t === "config" || t === "video" || t === "snapshots") && !online}
+              title={
+                (t === "config" || t === "video" || t === "snapshots") && !online
+                  ? "Connect the device to use this tab"
+                  : undefined
+              }
             >
               {t}
             </button>
@@ -135,6 +144,14 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
         ) : (
           <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
             The device must be connected to stream video or pull clips.
+          </div>
+        )
+      ) : hasVideo && tab === "snapshots" ? (
+        online ? (
+          <DeviceSnapshots serial={serial} sleeping={sleeping} />
+        ) : (
+          <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
+            The device must be connected to capture snapshots.
           </div>
         )
       ) : (
