@@ -10,6 +10,11 @@ admin/.env.local
 !**/.env.example
 !example.env
 
+# --- Generated per-unit stacks (scripts/provision-server.sh) ---
+# Keeps the canonical multi-unit deploy/docker-compose.yml; ignores the
+# operator-generated single-unit ones (docker-compose.<unit>.yml).
+deploy/docker-compose.*.yml
+
 # --- Go build output ---
 /bin/
 /out/
