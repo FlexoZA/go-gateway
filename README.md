@@ -1,6 +1,6 @@
 # device-gateway
 
-A Go rewrite of the DFM MVR gateway as a **single-unit-type** server framework.
+A Go rewrite of the DFM MVR gateway as a **plugin framework** for device protocols.
 
 The old `dfm-mvr-gateway` was one Node.js monolith running 8 TCP servers for 4
 device protocols (cathexis, jt808, tramigo, howen) with four copies of nearly
@@ -8,19 +8,34 @@ everything — connection registries, request managers, command dispatch, config
 validators. Most of those units were only ever wired up for testing, leaving a
 lot of confusing, redundant code.
 
-This project inverts that: **one binary, one unit type, one container.** A small
-protocol-agnostic framework core handles the TCP accept loop, configuration,
-logging, device authorization, and the all-important universal message. Each
-unit type is a plugin implementing one small interface. To bring up a new device
-type you scaffold a plugin and spin up a new container — nothing else is touched.
+This project inverts that. A small protocol-agnostic framework core handles the
+TCP accept loop, configuration, logging, device authorization, and the
+all-important universal message. Each unit type is a plugin implementing one
+small interface, and `app.Run(...)` takes one or more of them. That yields two
+deployment shapes from the same code:
+
+- **Multi-unit** (`cmd/gateway`, the default `deploy/docker-compose.yml`): one
+  process hosts every registered unit — today **Howen**, **Fleetiger**, and
+  **Cathexis** — each on its own TCP port, behind one shared registry, webhook,
+  HTTP API, and admin panel. Simplest to run as a single box.
+- **One unit per server** (`scripts/provision-server.sh <unit>`, building the
+  lean `cmd/<unit>` image): only that protocol compiles in, so a GPS-only
+  tracker carries no video/ffmpeg code and a crash or restart is isolated to
+  that one unit. Use this when you want independent deploys.
+
+Scaffolding a new device type (`scripts/new-gateway.sh`) writes both a plugin and
+a lean `cmd/<unit>` entrypoint; adding one line to `cmd/gateway` also hosts it in
+the multi-unit process.
 
 GPS/event **telemetry** is forwarded to the universal-JSON **webhook** — the
 external database that stores all GPS and event data. The gateway's own
-**PostgreSQL** is used only for the **unit registry** (verifying connecting
-devices) and future **server-settings** tables; no telemetry is stored there.
+**PostgreSQL** holds only gateway state — the **unit registry** (verifying
+connecting devices), server settings, event mappings, users, API keys, and clip
+metadata; no telemetry is stored there.
 
-The first unit type implemented is **Howen** (GPS + events, live video, recorded
-clips, device config & status) — the reference for what a full-featured plugin does.
+**Howen** (GPS + events, live video, recorded clips, device config & status) is
+the reference for a full-featured plugin; **Fleetiger** (a GT06-style GPS
+tracker) and **Cathexis** (MVR video + config) are the other implemented units.
 
 ## Documentation
 
@@ -35,8 +50,10 @@ The rest of this README is the high-level overview.
 
 - **No dead code.** A GPS-only tracker doesn't drag along video/clip/command
   machinery — it just doesn't enable those capabilities.
-- **Independent deploys.** A bug or restart in one unit type can't take down the
-  others; they're separate processes/containers.
+- **Independent deploys (optional).** Run one unit per server
+  (`scripts/provision-server.sh`) and a bug or restart in one unit type can't
+  take down the others; or host them together in the multi-unit process when a
+  single box is simpler.
 - **One message, every sink.** Every unit type funnels through the same universal
   builder; the built message is POSTed to the telemetry webhook (and any future
   telemetry sink), identical regardless of device.
@@ -164,7 +181,8 @@ node tools/gen-webhook-golden.mjs /path/to/dfm-mvr-gateway
 ## Architecture
 
 ```
-cmd/howen/main.go              entrypoint: wires the framework to the Howen plugin
+cmd/gateway/main.go            multi-unit entrypoint: app.Run(howen, fleetiger, cathexis)
+cmd/howen/main.go              lean single-unit entrypoint: app.Run(howen.New())
 internal/
   core/                        protocol-agnostic framework
     app/                       composition root: wires deps around a Protocol, app.Run()
@@ -182,6 +200,8 @@ internal/
     events.go                  event-code maps (DB-editable; raw Howen -> ACM codes)
     gps.go                     status -> normalized payload
     server.go                  Protocol + Session: registration, GPS, alarms
+  fleetiger/                   GT06-style GPS tracker plugin (GPS-only)
+  cathexis/                    MVR video + config plugin
 deploy/                        Dockerfile (generic, UNIT build arg) + compose
 scripts/new-gateway.sh         scaffold a new unit type's code
 scripts/provision-server.sh    stand up a server for an existing unit
@@ -207,6 +227,9 @@ shared wiring lives in `internal/core/app`, so a unit-type binary is just:
 func main() { app.Run(howen.New()) }
 ```
 
+`cmd/gateway` instead passes several — `app.Run(howen.New(), fleetiger.New(),
+cathexis.New())` — to host all of them in one process.
+
 Richer units add features by setting the matching `Capabilities` flag **and**
 implementing the optional interface the framework detects:
 
@@ -228,7 +251,7 @@ mappings in `commands.go`/`events.go`).
 ## Quick start
 
 ```bash
-# Build and run the Howen gateway + PostgreSQL together
+# Build and run the multi-unit gateway (howen + fleetiger + cathexis) + PostgreSQL
 docker compose -f deploy/docker-compose.yml up --build
 
 # inspect the unit registry (telemetry itself goes to the webhook)
@@ -250,8 +273,9 @@ docker run -p 33000:33000 \
 
 ## Configuration
 
-All configuration is environment-driven (one binary, one unit type — no per-unit
-config branching).
+All configuration is environment-driven and flat — no per-unit config branching.
+A multi-unit process shares one config; each unit takes its own device port via
+`<UNIT>_PORT` (e.g. `HOWEN_PORT`, `FLEETIGER_PORT`, `CATHEXIS_PORT`).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -306,7 +330,8 @@ per-unit stack `deploy/docker-compose.teltonika.yml`. Edit `deploy/.env`, then
 `docker compose -f deploy/docker-compose.teltonika.yml --env-file deploy/.env up -d --build`.
 
 One unit per server; build-time selection keeps each image free of code for
-protocols it will never run.
+protocols it will never run. Alternatively, register the unit in `cmd/gateway` to
+host it alongside the others in the multi-unit process (one box, shared DB).
 
 Devices with video/control set `Capabilities{HasVideo: true, ...}` and implement
 the additional milestone-2 hooks (see Roadmap).
@@ -334,4 +359,6 @@ message golden parity test (`internal/core/message`).
   live HLS via ffmpeg, recorded-clip ingest to server-side storage (`CLIPS_ROOT`),
   footage/recordings query, live device status, and full device configuration
   (read/write all parameter segments) from the admin panel.
-- **Milestone 3:** additional GPS-only unit types via the scaffold.
+- **Milestone 3 (in progress):** additional unit types via the scaffold —
+  **Fleetiger** (GT06-style GPS) and **Cathexis** (MVR video + config) are wired
+  into the multi-unit gateway.

@@ -1,7 +1,9 @@
 # Configuration & operations
 
-One gateway binary serves one unit type; configuration is flat and environment
-driven. Defaults are applied in `internal/core/config`.
+The gateway runs one or more unit-type plugins in a single process — the default
+`cmd/gateway` build hosts Howen, Fleetiger, and Cathexis; a lean `cmd/<unit>`
+build hosts just one. Configuration is flat and environment-driven. Defaults are
+applied in `internal/core/config`.
 
 ## Environment variables
 
@@ -9,7 +11,8 @@ driven. Defaults are applied in `internal/core/config`.
 |---|---|---|
 | `GATEWAY` | _(empty)_ | Identifier surfaced in the universal message `gateway` field. **Seeds the `gateway_name` server setting on first run**; thereafter edit it live in the panel (Server Settings → Gateway identity) |
 | `LISTEN_HOST` | `0.0.0.0` | Bind host for both the device TCP server and the HTTP API |
-| `LISTEN_PORT` | `33000` | Device TCP port (Howen control channel). **Seeds the `device_port` server setting on first run**; thereafter the stored value wins and is editable in the panel (Server Settings → Device connection), applied **on next gateway restart** — in Docker also update the published port to match |
+| `LISTEN_PORT` | `33000` | Generic device TCP port — the **fallback** for a unit that has no port of its own. Per-unit ports override it (see *Per-unit device ports* below). **Seeds the per-unit `device_port` setting on first run**; thereafter the stored value wins and is editable in the panel (Server Settings → Device connection), applied **on next gateway restart** — in Docker also update the published port to match |
+| `<UNIT>_PORT` | _(unit default)_ | Per-unit device TCP port when a process hosts several units: `HOWEN_PORT` (33000), `FLEETIGER_PORT` (8050), `CATHEXIS_PORT` (33010). Overrides `LISTEN_PORT` for that unit; the bundled compose sets all three |
 | `HTTP_PORT` | `8080` | Management/control HTTP API port; `0` disables the API |
 | `INTERNAL_API_TOKEN` | _(empty)_ | Shared secret the admin panel uses to authenticate (accepted as a Bearer alongside DB keys). Lets the panel work before any key exists → first-run setup. Set the same value as the admin's `GATEWAY_API_TOKEN` (compose: both from `ADMIN_API_TOKEN`) |
 | `DEVICE_WEBHOOK_URL` | _(empty)_ | Telemetry sink — universal-JSON endpoint that stores all GPS/event data. **Seeds the first `webhooks` row on first run** (with a database, manage one or more webhooks live in the admin panel → Server Settings, each enable/disable). Aliases: `WEBHOOK_URL`, `N8N_WEBHOOK_URL` |
@@ -29,6 +32,15 @@ driven. Defaults are applied in `internal/core/config`.
 The bundled compose file also reads `POSTGRES_USER` / `POSTGRES_PASSWORD` /
 `POSTGRES_DB` to provision the Postgres container and build `DATABASE_URL`.
 
+### Per-unit device ports
+
+When a process hosts more than one unit, each binds its own device port,
+resolved per unit as: the admin-editable `device_port` setting → `<UNIT>_PORT`
+env (`HOWEN_PORT`, `FLEETIGER_PORT`, `CATHEXIS_PORT`) → the unit's built-in
+default (Howen 33000, Fleetiger 8050, Cathexis 33010) → `LISTEN_PORT`. Live
+media uses `MEDIA_PORT` similarly. Keep each published Docker port in sync with
+the resolved value.
+
 ## Two independent auth planes
 
 - **Devices → gateway (TCP):** authenticated by **serial** at registration
@@ -39,10 +51,11 @@ The bundled compose file also reads `POSTGRES_USER` / `POSTGRES_PASSWORD` /
 ## Running
 
 ```bash
-# Build + run the Howen gateway and PostgreSQL together
+# Build + run the multi-unit gateway (Howen + Fleetiger + Cathexis) + PostgreSQL
 docker compose -f deploy/docker-compose.yml up --build
 
-# Build a unit-type image directly (UNIT picks which cmd/ to compile)
+# Build an image directly. UNIT picks which cmd/ compiles: `gateway` = multi-unit
+# (the compose default), or a single unit like `howen` for a lean image.
 docker build -f deploy/Dockerfile --build-arg UNIT=howen -t device-gateway-howen .
 ```
 
@@ -97,9 +110,10 @@ docker compose -f deploy/docker-compose.teltonika.yml --env-file deploy/.env up 
 ```
 
 One unit per server — build-time selection keeps each image free of code (and
-dependencies like ffmpeg) for protocols it will never run. The admin panel reads
-the running gateway's effective capabilities from `GET /api/gateway/info` and hides
-UI for features this build/config lacks.
+dependencies like ffmpeg) for protocols it will never run. (Or register the unit
+in `cmd/gateway` to host it in the multi-unit process instead.) The admin panel
+reads the running gateway's effective capabilities from `GET /api/gateway/info`
+and hides UI for features this build/config lacks.
 
 ## Production notes
 

@@ -97,7 +97,7 @@ Server-side env vars (see `admin/.env.example`):
 
 | Var | Required | Description |
 |-----|----------|-------------|
-| `GATEWAY_URL` | yes | Base URL of the gateway HTTP API (e.g. `http://howen:8080`). |
+| `GATEWAY_URL` | yes | Base URL of the gateway HTTP API (e.g. `http://gateway:8080`). |
 | `GATEWAY_API_TOKEN` | yes | Shared internal service token (same value as the gateway's `INTERNAL_API_TOKEN`) the BFF uses for every gateway call — this works before any DB-minted key exists, enabling first-run setup. A `dgw_…` key in `GATEWAY_API_KEY` is also accepted as a fallback if this is unset. |
 | `SESSION_SECRET` | yes | ≥16-char secret signing session cookies. `openssl rand -base64 32`. |
 | `SESSION_TTL_HOURS` | no | Session lifetime in hours (default 12). |
