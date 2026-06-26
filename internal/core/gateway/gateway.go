@@ -85,16 +85,32 @@ type SnapshotResult struct {
 	Files     []SnapshotFile `json:"files"`
 }
 
-// Snapshotter is implemented by a protocol session that can trigger an on-demand
-// still-image capture (Howen 0x4020). The HTTP API reaches it through the Hub.
+// SnapshotFileInfo is one still image the device has stored on its SD card,
+// discovered by a file query. DevicePath feeds the file-transfer download.
+type SnapshotFileInfo struct {
+	Channel    int    `json:"channel"`
+	DevicePath string `json:"device_path"`
+	Size       int64  `json:"size"`
+	UTC        int64  `json:"utc"`         // capture time, true UTC epoch
+	DeviceTime string `json:"device_time"` // raw device-local wall-clock
+	Kind       string `json:"kind"`        // "general" | "alarm"
+}
+
+// Snapshotter is implemented by a protocol session that can capture and retrieve
+// still images (Howen). The HTTP API reaches it through the Hub.
 //
-// RequestSnapshot triggers a capture and returns the device-side file paths.
-// CaptureImage goes further: it captures one camera and fetches the JPEG bytes
-// back via the file-transfer path, returning the image inline (requires the media
-// port/advertise host to be enabled).
+//   - RequestSnapshot triggers a capture and returns the device-side file paths.
+//   - CaptureImage captures one camera and fetches the JPEG inline.
+//   - SearchSnapshots lists stills already stored on the device for a window
+//     (kind "general" or "alarm").
+//   - FetchSnapshotFile downloads one stored still by its device path.
+//
+// All but RequestSnapshot need the media port/advertise host enabled.
 type Snapshotter interface {
 	RequestSnapshot(ctx context.Context, channels []int, resolution int) (SnapshotResult, error)
 	CaptureImage(ctx context.Context, camera, resolution int) ([]byte, error)
+	SearchSnapshots(ctx context.Context, camera int, startUTC, endUTC int64, kind string) ([]SnapshotFileInfo, error)
+	FetchSnapshotFile(ctx context.Context, devicePath string) ([]byte, error)
 }
 
 // ConfigController is implemented by a protocol session that can read and write

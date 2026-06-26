@@ -137,6 +137,80 @@ func (s *session) fetchDeviceFile(ctx context.Context, path, ft string) ([]byte,
 	}
 }
 
+// SearchSnapshots lists stills the device has stored on its SD card for a camera
+// (or all cameras when camera < 0) over a UTC window, via a file query (0x4060).
+// kind "alarm" searches alarm snapshots (file type 4); anything else searches
+// general snapshots (file type 3). Returned times are converted from the device
+// clock back to UTC.
+func (s *session) SearchSnapshots(ctx context.Context, camera int, startUTC, endUTC int64, kind string) ([]gateway.SnapshotFileInfo, error) {
+	if s.gate != gateApproved {
+		return nil, errors.New("device not approved")
+	}
+	if s.lifecycle == "sleep" {
+		return nil, gateway.ErrDeviceSleeping
+	}
+	if startUTC <= 0 || endUTC <= startUTC {
+		return nil, errors.New("invalid start_utc / end_utc")
+	}
+	ft, kindLabel := "3", "general"
+	if kind == "alarm" {
+		ft, kindLabel = "4", "alarm"
+	}
+	channel := "0" // 0 = all cameras
+	if camera >= 0 {
+		channel = strconv.Itoa(camera + 1)
+	}
+	files, err := s.queryFiles(ctx, channel, 1, startUTC, endUTC, ft)
+	if err != nil {
+		return nil, err
+	}
+	return parseSnapshotFiles(files, kindLabel, s.conn.Deps.DeviceTZOffsetHours), nil
+}
+
+// FetchSnapshotFile downloads a stored still by its device path over the
+// file-transfer path (0x4090) and returns the raw JPEG.
+func (s *session) FetchSnapshotFile(ctx context.Context, devicePath string) ([]byte, error) {
+	if s.conn.Deps.Snapshots == nil || s.conn.Deps.MediaAdvertiseHost == "" {
+		return nil, errors.New("snapshot fetch is not enabled on this gateway")
+	}
+	if strings.TrimSpace(devicePath) == "" {
+		return nil, errors.New("missing snapshot path")
+	}
+	if s.gate != gateApproved {
+		return nil, errors.New("device not approved")
+	}
+	if s.lifecycle == "sleep" {
+		return nil, gateway.ErrDeviceSleeping
+	}
+	return s.fetchDeviceFile(ctx, devicePath, "3") // ft 3 = general snapshot
+}
+
+// parseSnapshotFiles converts raw file-query entries to SnapshotFileInfo, mapping
+// the device-local wall-clock time back to a UTC epoch.
+func parseSnapshotFiles(files []map[string]any, kind string, tzOffset float64) []gateway.SnapshotFileInfo {
+	out := make([]gateway.SnapshotFileInfo, 0, len(files))
+	for _, fi := range files {
+		fn := strings.TrimSpace(toString(fi["fn"]))
+		if fn == "" {
+			continue
+		}
+		st := toString(fi["st"])
+		cam := int(recInt(fi["chl"])) - 1
+		if cam < 0 {
+			cam = 0
+		}
+		out = append(out, gateway.SnapshotFileInfo{
+			Channel:    cam,
+			DevicePath: fn,
+			Size:       recInt(fi["fs"]),
+			UTC:        parseHowenDeviceTime(st, tzOffset),
+			DeviceTime: st,
+			Kind:       kind,
+		})
+	}
+	return out
+}
+
 // parseSnapshotResult extracts the rl[] {ch, fn} entries from a 0x1020 response.
 func parseSnapshotResult(resp map[string]any) []gateway.SnapshotFile {
 	raw, ok := resp["rl"].([]any)

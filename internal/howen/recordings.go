@@ -86,6 +86,19 @@ func (s *session) QueryRecordings(ctx context.Context, camera, profile int, star
 	_, streamType := channelStream(0, profile)
 	tz := s.conn.Deps.DeviceTZOffsetHours
 
+	files, err := s.queryFiles(ctx, channel, streamType, startUTC, endUTC, "1") // ft 1 = normal recording
+	if err != nil {
+		return nil, err
+	}
+	return parseRecordings(files, profile, tz), nil
+}
+
+// queryFiles runs one file query (0x4060) for a file type and returns the raw
+// device file entries (the `fi` objects). Shared by QueryRecordings (ft=1) and
+// SearchSnapshots (ft=3/4). The caller localizes/parses times.
+func (s *session) queryFiles(ctx context.Context, channel string, streamType int, startUTC, endUTC int64, ft string) ([]map[string]any, error) {
+	tz := s.conn.Deps.DeviceTZOffsetHours
+
 	ss := fmt.Sprintf("query_%s_%s", s.serial, hexNow())
 	c := &fileQueryCollector{done: make(chan struct{})}
 	s.pendingMu.Lock()
@@ -102,7 +115,7 @@ func (s *session) QueryRecordings(ctx context.Context, camera, profile int, star
 		"chl": channel,
 		"st":  formatHowenDeviceTime(startUTC, tz),
 		"et":  formatHowenDeviceTime(endUTC, tz),
-		"ft":  "1", // file type 1 = normal recording
+		"ft":  ft,
 		"si":  strconv.Itoa(streamType),
 	}
 	if err := s.conn.WriteFrame(buildHowenJSONFrame(msgFileQuery, body)); err != nil {
@@ -119,7 +132,7 @@ func (s *session) QueryRecordings(ctx context.Context, camera, profile int, star
 	if c.err != nil {
 		return nil, c.err
 	}
-	return parseRecordings(c.files, profile, tz), nil
+	return c.files, nil
 }
 
 // parseRecordings converts raw device file entries to gateway.Recording, mapping

@@ -322,13 +322,15 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		// Discover what footage a device has (file query) before requesting a clip.
 		"GET /api/units/{serial}/recordings": s.handleQueryRecordings,
 		// Recorded clips (request a download, then poll status / download the .mp4).
-		"POST /api/units/{serial}/snapshots":      s.handleSnapshotRequest,
-		"POST /api/units/{serial}/snapshot/image": s.handleSnapshotImage,
-		"POST /api/units/{serial}/clips":          s.handleClipRequest,
-		"GET /api/clips":                          s.handleListClips,
-		"GET /api/clips/{id}":                     s.handleGetClip,
-		"GET /api/clips/{id}/download":            s.handleClipDownload,
-		"DELETE /api/clips/{id}":                  s.handleDeleteClip,
+		"POST /api/units/{serial}/snapshots":       s.handleSnapshotRequest,
+		"POST /api/units/{serial}/snapshot/image":  s.handleSnapshotImage,
+		"GET /api/units/{serial}/snapshots/search": s.handleSnapshotSearch,
+		"GET /api/units/{serial}/snapshots/file":   s.handleSnapshotFile,
+		"POST /api/units/{serial}/clips":           s.handleClipRequest,
+		"GET /api/clips":                           s.handleListClips,
+		"GET /api/clips/{id}":                      s.handleGetClip,
+		"GET /api/clips/{id}/download":             s.handleClipDownload,
+		"DELETE /api/clips/{id}":                   s.handleDeleteClip,
 
 		// Device approval (registry, via the store).
 		"GET /api/devices":                   s.handleListDevices,
@@ -842,6 +844,68 @@ func (s *Server) handleSnapshotImage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	img, err := snap.CaptureImage(ctx, camera, resolution)
+	if err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Length", strconv.Itoa(len(img)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(img)
+}
+
+// GET /api/units/{serial}/snapshots/search?camera=&start_utc=&end_utc=&kind= —
+// list stills the device already has on its SD card for a window. camera 0-based
+// (omit/-1 = all); kind `general` (default) or `alarm`; times are UTC seconds.
+func (s *Server) handleSnapshotSearch(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	snap, ok := s.hub.Snapshotter(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or snapshots unavailable"})
+		return
+	}
+	q := r.URL.Query()
+	camera := -1
+	if v := q.Get("camera"); v != "" {
+		camera, _ = strconv.Atoi(v)
+	}
+	start, _ := strconv.ParseInt(q.Get("start_utc"), 10, 64)
+	end, _ := strconv.ParseInt(q.Get("end_utc"), 10, 64)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	files, err := snap.SearchSnapshots(ctx, camera, start, end, q.Get("kind"))
+	if err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"snapshots": files, "count": len(files)})
+}
+
+// GET /api/units/{serial}/snapshots/file?path=<device_path> — download one stored
+// still by its device path (from a search result), returned as image/jpeg.
+func (s *Server) handleSnapshotFile(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	snap, ok := s.hub.Snapshotter(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or snapshots unavailable"})
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if strings.TrimSpace(path) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing path query parameter"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	img, err := snap.FetchSnapshotFile(ctx, path)
 	if err != nil {
 		s.writeStreamError(w, err)
 		return
