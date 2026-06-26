@@ -322,11 +322,13 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		// Discover what footage a device has (file query) before requesting a clip.
 		"GET /api/units/{serial}/recordings": s.handleQueryRecordings,
 		// Recorded clips (request a download, then poll status / download the .mp4).
-		"POST /api/units/{serial}/clips": s.handleClipRequest,
-		"GET /api/clips":                 s.handleListClips,
-		"GET /api/clips/{id}":            s.handleGetClip,
-		"GET /api/clips/{id}/download":   s.handleClipDownload,
-		"DELETE /api/clips/{id}":         s.handleDeleteClip,
+		"POST /api/units/{serial}/snapshots":      s.handleSnapshotRequest,
+		"POST /api/units/{serial}/snapshot/image": s.handleSnapshotImage,
+		"POST /api/units/{serial}/clips":          s.handleClipRequest,
+		"GET /api/clips":                          s.handleListClips,
+		"GET /api/clips/{id}":                     s.handleGetClip,
+		"GET /api/clips/{id}/download":            s.handleClipDownload,
+		"DELETE /api/clips/{id}":                  s.handleDeleteClip,
 
 		// Device approval (registry, via the store).
 		"GET /api/devices":                   s.handleListDevices,
@@ -777,6 +779,77 @@ func (s *Server) handleQueryRecordings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"recordings": recs, "count": len(recs)})
+}
+
+// POST /api/units/{serial}/snapshots — ask the device to capture a still image on
+// one or more camera channels (H-Protocol 0x4020). The response reports the
+// device-side file paths; fetching the JPEG bytes is a later milestone.
+//
+// Body: {"channels": [0,1], "resolution": 0}  (channels 0-based; default [0].
+// resolution: 0 follow-video, 1 1080, 2 720, 3 VGA, 4 D1.)
+func (s *Server) handleSnapshotRequest(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	snap, ok := s.hub.Snapshotter(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or snapshots unavailable"})
+		return
+	}
+	var req struct {
+		Channels   []int `json:"channels"`
+		Resolution int   `json:"resolution"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	res, err := snap.RequestSnapshot(ctx, req.Channels, req.Resolution)
+	if err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session_id": res.SessionID, "files": res.Files})
+}
+
+// POST /api/units/{serial}/snapshot/image?camera=0&resolution=0 — capture a still
+// on one camera and return the JPEG bytes inline (the device captures, then
+// uploads the file over the media port). Needs video/media enabled on the gateway.
+func (s *Server) handleSnapshotImage(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	snap, ok := s.hub.Snapshotter(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or snapshots unavailable"})
+		return
+	}
+	q := r.URL.Query()
+	camera := 0
+	if v := q.Get("camera"); v != "" {
+		camera, _ = strconv.Atoi(v)
+	}
+	resolution := 0
+	if v := q.Get("resolution"); v != "" {
+		resolution, _ = strconv.Atoi(v)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	img, err := snap.CaptureImage(ctx, camera, resolution)
+	if err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Length", strconv.Itoa(len(img)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(img)
 }
 
 // POST /api/units/{serial}/clips — ask the device to upload a recorded clip. The

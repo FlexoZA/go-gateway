@@ -151,6 +151,50 @@ func buildGpsPayload(status *howenStatusData, imei string) map[string]any {
 	return p
 }
 
+// datahubEventCode is the ec=771 "Datahub/OBD status notification" — vehicle
+// CAN/OBD telemetry (rpm, speed, fuel, coolant, distance, I/O bits), not an alarm.
+const datahubEventCode = 771
+
+// isTelemetryAlarm reports alarm codes that carry periodic telemetry rather than
+// an event, so handleAlarmData routes them to a "gps" message instead of "event".
+func isTelemetryAlarm(ec any) bool {
+	code, ok := numberOrNullInt(ec)
+	return ok && code == datahubEventCode
+}
+
+// buildDatahubPayload turns an ec=771 datahub frame into a "gps" telemetry
+// payload: the OBD/CAN `det` fields become universal sensor entries (see
+// resolveSensors) plus inputs/outputs bit strings. Raw `det` is kept under
+// howen_datahub for forward-compat. See docs/Howen_mapping_improvements.md §5.
+func buildDatahubPayload(status *howenStatusData, detail map[string]any, imei string) map[string]any {
+	p := statusCommonFields(status, imei)
+	p["name"] = "gps"
+
+	setNum := func(key string, srcKeys ...string) {
+		if v, ok := numberOrNullFloat(detailGet(detail, srcKeys...)); ok {
+			p[key] = v
+		}
+	}
+	setNum("engine_rpm", "rpm")       // ENGINE_SPEED_RPM
+	setNum("obd_speed", "spd")        // vehicle SPEED (OBD)
+	setNum("coolant_temp_c", "ct")    // ENGINE_COOLANT_TEMPERATURE
+	setNum("accel_pedal_pct", "acc")  // ACCELERATOR_PEDAL_POS
+	setNum("obd_distance", "ds")      // DISTANCE
+	setNum("fuel_l", "fu")            // FUELLEVEL -> universal "fuel_level"
+	setNum("trip_fuel_used_cc", "ml") // TOTAL_TRIP_FUEL_USED_CC
+
+	if s, ok := detailGet(detail, "in").(string); ok && s != "" {
+		p["inputs"] = s // main-unit input bits
+	}
+	if s, ok := detailGet(detail, "out").(string); ok && s != "" {
+		p["outputs"] = s // main-unit output bits
+	}
+	if detail != nil {
+		p["howen_datahub"] = detail
+	}
+	return p
+}
+
 // buildEventPayload assembles the payload for an ALARM_DATA message, resolving the
 // event codes against the device model's mapping table (falling back to the unit
 // default then the built-in defaults).

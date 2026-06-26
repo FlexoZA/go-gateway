@@ -52,11 +52,14 @@ func TestParseLiveZeroVoltageAlarm(t *testing.T) {
 	if ap == nil {
 		t.Fatal("nil parse")
 	}
+	// Live capture: voltage alarm dt=7. Per H-Protocol spec §14, dt=7 is
+	// "Start up" (power-on), not a generic abnormality — see
+	// docs/Howen_mapping_improvements.md.
 	if dt, _ := ap.Detail["dt"].(string); dt != "7" {
 		t.Fatalf("detail.dt = %q, want 7", dt)
 	}
-	if got := mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0]; got != "BATTERY:ABNORMAL:EXT" {
-		t.Fatalf("event = %q, want BATTERY:ABNORMAL:EXT", got)
+	if got := mapHowenEventCodes("", ap.EC, ap.Detail, ap.Alarm)[0]; got != "POWER:ON" {
+		t.Fatalf("event = %q, want POWER:ON", got)
 	}
 }
 

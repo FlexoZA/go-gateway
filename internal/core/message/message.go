@@ -480,6 +480,14 @@ func resolveSensors(payload map[string]any) []any {
 		{"humidity_out_vehicle", payload["humidity_out_vehicle"]},
 		{"fuel_level", payload["fuel_l"]},
 		{"aux_fuel_l", payload["aux_fuel_l"]},
+		// OBD/CAN telemetry (e.g. Howen datahub, ec=771). Optional; absent on
+		// most messages — receivers must tolerate missing sensors.
+		{"engine_rpm", payload["engine_rpm"]},
+		{"obd_speed", payload["obd_speed"]},
+		{"coolant_temp_c", payload["coolant_temp_c"]},
+		{"accel_pedal_pct", payload["accel_pedal_pct"]},
+		{"obd_distance", payload["obd_distance"]},
+		{"trip_fuel_used_cc", payload["trip_fuel_used_cc"]},
 		{"speed_recorder", payload["speed_recorder"]},
 		{"io_status_bits", payload["io_status_bits"]},
 		{"extended_vehicle_signal_status", payload["extended_vehicle_signal_status"]},

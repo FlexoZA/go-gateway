@@ -71,6 +71,32 @@ type VideoController interface {
 	QueryRecordings(ctx context.Context, camera, profile int, startUTC, endUTC int64) ([]Recording, error)
 }
 
+// SnapshotFile is one still image the device captured: a camera channel and the
+// device-side file path it was written to. Fetching the JPEG bytes needs the
+// file-transfer path (0x4090), a later milestone.
+type SnapshotFile struct {
+	Channel    int    `json:"channel"`
+	DevicePath string `json:"device_path"`
+}
+
+// SnapshotResult is a device's response to an on-demand snapshot request.
+type SnapshotResult struct {
+	SessionID string         `json:"session_id"`
+	Files     []SnapshotFile `json:"files"`
+}
+
+// Snapshotter is implemented by a protocol session that can trigger an on-demand
+// still-image capture (Howen 0x4020). The HTTP API reaches it through the Hub.
+//
+// RequestSnapshot triggers a capture and returns the device-side file paths.
+// CaptureImage goes further: it captures one camera and fetches the JPEG bytes
+// back via the file-transfer path, returning the image inline (requires the media
+// port/advertise host to be enabled).
+type Snapshotter interface {
+	RequestSnapshot(ctx context.Context, channels []int, resolution int) (SnapshotResult, error)
+	CaptureImage(ctx context.Context, camera, resolution int) ([]byte, error)
+}
+
 // ConfigController is implemented by a protocol session that can read and write
 // its device's parameter configuration (Wi-Fi, mobile, server, …). The `sc` map
 // is keyed by segment name; each segment is an object of fields.
@@ -134,7 +160,7 @@ type MediaListener interface {
 // manager is present). The returned listener is fully configured to bind addr and
 // write into mgr/clips.
 type MediaServerProvider interface {
-	NewMediaServer(addr string, mgr *media.Manager, clips *media.ClipRegistry, log *logging.Logger) MediaListener
+	NewMediaServer(addr string, mgr *media.Manager, clips *media.ClipRegistry, snaps *media.SnapshotFetch, log *logging.Logger) MediaListener
 }
 
 // IdleTimeoutProvider lets a unit override the framework's default per-connection
@@ -249,6 +275,10 @@ type Deps struct {
 	// Clips tracks recorded-clip downloads (.mp4 to the server bucket); nil when
 	// video/clips are disabled. A protocol session must nil-check.
 	Clips *media.ClipRegistry
+	// Snapshots tracks in-flight in-memory file fetches (Howen 0x4090
+	// file-transfer, e.g. snapshot JPEGs). Nil when video is disabled; a session
+	// must nil-check.
+	Snapshots *media.SnapshotFetch
 	// MediaAdvertiseHost is the host:port the device dials back for media frames
 	// (embedded in the start-stream/playback command). Empty when video is disabled.
 	MediaAdvertiseHost string

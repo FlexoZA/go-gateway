@@ -7,7 +7,7 @@ import (
 )
 
 // bypassed mirrors bypassedEventCodes for the assertions below.
-var bypassed = []int{1, 7, 11, 12, 15, 27, 28, 30, 32, 41, 43, 48, 768}
+var bypassed = []int{1, 7, 11, 12, 13, 15, 22, 27, 28, 30, 32, 41, 43, 48, 768}
 
 // TestBypassedEventCodesNotSeeded: codes the switch resolves internally are not
 // emitted as editable event_code rows, while honored event_code rows and the

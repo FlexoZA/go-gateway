@@ -27,10 +27,15 @@ const (
 	mapTypeEventCode          = "event_code"
 )
 
+// defaultInputEventMap maps the input-trigger sub-field `num` (spec §2 / §3.8).
+// 14/15/16 are door-CLOSE signals (previously mis-mapped to ALARM:DOOR_OPEN);
+// 9/10 are turn signals and 12 is reverse (previously flattened to ALARM).
 var defaultInputEventMap = map[int]string{
 	1: "PANIC", 2: "ALARM:DOOR_OPEN", 3: "ALARM:DOOR_OPEN", 4: "ALARM:DOOR_OPEN",
-	9: "ALARM", 10: "ALARM", 11: "ALARM:FOOTBRAKE", 12: "ALARM",
-	14: "ALARM:DOOR_OPEN", 15: "ALARM:DOOR_OPEN", 16: "ALARM:DOOR_OPEN", 22: "ALARM",
+	5: "INPUT:LOW_BEAM", 6: "INPUT:HIGH_BEAM", 9: "INPUT:TURN_RIGHT", 10: "INPUT:TURN_LEFT",
+	11: "ALARM:FOOTBRAKE", 12: "INPUT:REVERSE",
+	14: "INPUT:DOOR_CLOSE", 15: "INPUT:DOOR_CLOSE", 16: "INPUT:DOOR_CLOSE",
+	17: "INPUT:INTERCOM", 18: "INPUT:LIFT", 22: "ALARM", 23: "INPUT:SAFE_TO_LOAD",
 }
 
 var defaultVibrationDirectionEventMap = map[int]string{
@@ -39,16 +44,22 @@ var defaultVibrationDirectionEventMap = map[int]string{
 	7: "HARSH:ACCELERATION", 8: "HARSH:BRAKING",
 }
 
+// defaultGeofenceStatusEventMap maps the geofence sub-field `st` (spec §7).
+// 4/5 are low-speed alarm/warning (previously ZONE:UNKNOWN_EVENT); 9/10 are
+// pre-entry/pre-exit (previously conflated with ENTER/EXIT).
 var defaultGeofenceStatusEventMap = map[int]string{
-	0: "ZONE:ENTER", 1: "ZONE:EXIT", 2: "ZONE:SPEEDING", 3: "SPEEDING",
-	4: "ZONE:UNKNOWN_EVENT", 5: "ZONE:UNKNOWN_EVENT", 6: "ZONE:FORBIDDEN_STOP",
-	7: "ZONE:FORBIDDEN_STOP", 8: "ZONE:DELAYED_STOP", 9: "ZONE:ENTER", 10: "ZONE:EXIT",
+	0: "ZONE:ENTER", 1: "ZONE:EXIT", 2: "ZONE:SPEEDING", 3: "ZONE:SPEEDING:WARNING",
+	4: "ZONE:SPEED_LOW", 5: "ZONE:SPEED_LOW:WARNING", 6: "ZONE:FORBIDDEN_STOP",
+	7: "ZONE:FORBIDDEN_STOP", 8: "ZONE:DELAYED_STOP", 9: "ZONE:PRE_ENTER", 10: "ZONE:PRE_EXIT",
 }
 
+// defaultVoltageEventMap maps the voltage sub-field `dt` (spec §14).
+// 2 is high-voltage (not generic abnormal); 6 is abnormal shutdown; 7 is
+// start-up/power-on (previously mis-mapped to BATTERY:ABNORMAL:EXT).
 var defaultVoltageEventMap = map[int]string{
-	1: "BATTERY:LOW:EXT", 2: "BATTERY:ABNORMAL:EXT", 3: "BATTERY:DISCONNECTED",
-	4: "BATTERY:CONNECTED", 5: "BATTERY:DISCONNECTED", 6: "BATTERY:LOW:EXT",
-	7: "BATTERY:ABNORMAL:EXT",
+	1: "BATTERY:LOW:EXT", 2: "BATTERY:HIGH:EXT", 3: "BATTERY:DISCONNECTED",
+	4: "BATTERY:CONNECTED", 5: "BATTERY:DISCONNECTED", 6: "POWER:OFF:ABNORMAL",
+	7: "POWER:ON",
 }
 
 var defaultDmsAdasEventMap = map[int]string{
@@ -59,10 +70,11 @@ var defaultDmsAdasEventMap = map[int]string{
 	19: "AI:LANE_DEPARTURE", 20: "AI:LANE_DEPARTURE", 21: "COLLISION",
 	33: "AI:FATIGUE", 34: "AI:CELLPHONE", 35: "AI:SMOKING", 36: "AI:DISTRACTION",
 	37: "AI:DRIVER:ABNORMAL", 39: "AI:EYES_CLOSED:CRITICAL", 40: "AI:YAWN:CRITICAL",
-	49: "AI:DRIVER:CHANGE", 65: "AI:EYES_CLOSED", 66: "AI:YAWN", 67: "AI:LENS_COVERED",
-	68: "AI:DISTRACTION", 69: "AI:SEATBELT", 70: "AI:NO_DRIVER", 72: "AI:DRIVER:CHANGE",
-	73: "AI:TAMPER", 80: "AI:EYES_DETECTION_FAILED", 82: "AI:NO_DRIVER", 83: "AI:NO_DRIVER",
-	85: "AI:DRIVER:MASK", 96: "AI:BLINDSPOT", 97: "AI:BLINDSPOT", 98: "AI:BLINDSPOT",
+	41: "AI:CODRIVER", 49: "AI:DRIVER:CHANGE", 65: "AI:EYES_CLOSED", 66: "AI:YAWN",
+	67: "AI:LENS_COVERED", 68: "AI:DISTRACTION", 69: "AI:SEATBELT", 70: "AI:NO_DRIVER",
+	71: "AI:DRINKING", 72: "AI:DRIVER:CHANGE", 73: "AI:DRIVER:RETURN",
+	80: "AI:EYES_DETECTION_FAILED", 81: "AI:AUTH:OK", 82: "AI:AUTH:FAIL", 83: "AI:NO_DRIVER",
+	85: "AI:DRIVER:MASK", 87: "AI:EATING", 96: "AI:BLINDSPOT", 97: "AI:BLINDSPOT", 98: "AI:BLINDSPOT",
 	99: "AI:BLINDSPOT", 100: "AI:BLINDSPOT", 101: "AI:BLINDSPOT", 102: "AI:BLINDSPOT",
 	103: "AI:BLINDSPOT", 104: "AI:BLINDSPOT", 105: "AI:BLINDSPOT", 106: "AI:BLINDSPOT",
 	107: "AI:BLINDSPOT",
@@ -75,16 +87,25 @@ var defaultMediaAlarmSubtypeEventMap = map[int]string{
 	70: "AI:NO_DRIVER", 80: "AI:EYES_DETECTION_FAILED",
 }
 
+// defaultEventCodeMap maps the main alarm code `ec` for codes not resolved by
+// built-in switch logic. Codes/labels follow the official online master list
+// (docs/Howen_master_event_codes_2026.csv); see docs/Howen_mapping_improvements.md.
+// ec 13 (geofence), 15 (door) and 22 (swipe-card) are resolved by switch logic
+// in mapHowenEventCodes, so they are bypassed here (not editable event_code rows).
 var defaultEventCodeMap = map[int]string{
-	1: "VIDEO_LOSS", 2: "ALARM", 3: "ALARM:TAMPERING", 4: "ALARM", 5: "PANIC",
-	6: "ALARM", 7: "SPEEDING", 8: "TEMP:LOW", 9: "TEMP:HIGH", 11: "PARKING:START",
-	12: "ALARM:VIBRATION", 15: "ALARM", 16: "ALARM:HARDWARE:FAULT", 19: "IGNITION:OFF",
-	22: "MESSAGE:BUFFERED", 24: "HARSH:ACCELERATION", 25: "HARSH:BRAKING", 26: "SPEED:LOW",
-	27: "SPEEDING", 28: "ALARM", 30: "ALARM", 31: "IGNITION:ON", 32: "IDLING:START",
-	41: "TRIP:START", 43: "TRIP:END", 48: "SPEEDING", 49: "ALARM", 59: "DEVICE:WAKEUP",
-	60: "ALARM:HARDWARE:FAULT", 61: "ALARM", 62: "AI:FATIGUE", 78: "AI:TAMPER",
-	80: "ALARM:HARDWARE:FAULT", 768: "TRIP:UNKNOWN", 769: "ALARM", 770: "ALARM:HARDWARE:FAULT",
-	771: "ALARM", 772: "ALARM:HARDWARE:FAULT", 773: "WATER:FLOW",
+	1: "VIDEO_LOSS", 2: "ALARM:MOTION", 3: "ALARM:TAMPERING", 4: "ALARM", 5: "PANIC",
+	6: "SPEED:LOW", 7: "SPEEDING", 8: "TEMP:LOW", 9: "TEMP:HIGH", 11: "PARKING:START",
+	12: "ALARM:VIBRATION", 16: "ALARM:HARDWARE:FAULT", 19: "IGNITION:OFF",
+	24: "HARSH:ACCELERATION", 25: "HARSH:BRAKING", 26: "SPEED:LOW",
+	27: "SPEEDING", 28: "ALARM", 29: "PEOPLE:COUNT", 30: "ALARM", 31: "IGNITION:ON", 32: "IDLING:START",
+	33: "GPS:ANTENNA:BREAK", 34: "GPS:ANTENNA:SHORT", 36: "CANBUS:ABNORMAL", 37: "TOWING:START",
+	40: "VEHICLE:MOVE", 41: "TRIP:START", 43: "TRIP:END", 44: "GPS:RECOVER", 48: "SPEEDING",
+	49: "LOAD:ALARM", 50: "SIM:LOST", 59: "DEVICE:WAKEUP", 60: "SATELLITE:ABNORMAL",
+	61: "ALARM:ALCOHOL", 62: "AI:FATIGUE", 76: "GPS:JAMMED", 78: "AI:INSTALL:ABNORMAL",
+	80: "AI:CALIBRATION", 768: "TRIP:UNKNOWN", 769: "TIRE:PRESSURE", 770: "ALARM:HARDWARE:FAULT",
+	772: "DEVICE:SELF_CHECK", 773: "WATER:FLOW",
+	// ec 771 (datahub/OBD) is intercepted in handleAlarmData and forwarded as a
+	// "gps" telemetry message (see buildDatahubPayload), so it has no row here.
 }
 
 // Mappings is the active set of code→event lookup tables used by
@@ -139,14 +160,15 @@ func defaultMappings() *Mappings {
 // built-in logic and never looks up in the editable event_code map, so editing
 // their event_code row would have no effect. They fall into two groups:
 //   - literal / dynamic outputs: 1 (channel video-loss), 7/27/48 & 32
-//     (SPEEDING/IDLING START-vs-END), 11/41/43/768 (parking/trip literals);
-//   - sub-table codes 12/15/28/30, which read their OWN map_type
+//     (SPEEDING/IDLING START-vs-END), 11/41/43/768 (parking/trip literals),
+//     15 (door open/close from st), 22 (swipe-card from tp);
+//   - sub-table codes 12/13/28/30, which read their OWN map_type
 //     (vibration_direction/geofence_status/voltage/dms_adas), never event_code.
 //
 // These are not seeded as editable event_code rows, and any seeded by older
 // builds are pruned (see PrunableMappings), so the admin only shows event_code
 // rows that take effect. The sub-table map_types remain fully editable.
-var bypassedEventCodes = []int{1, 7, 11, 12, 15, 27, 28, 30, 32, 41, 43, 48, 768}
+var bypassedEventCodes = []int{1, 7, 11, 12, 13, 15, 22, 27, 28, 30, 32, 41, 43, 48, 768}
 
 func isBypassedEventCode(code int) bool {
 	for _, c := range bypassedEventCodes {
@@ -262,6 +284,32 @@ func numberOrNullInt(v any) (int, bool) {
 	}
 }
 
+// numberOrNullFloat parses a Howen detail value (string/number) into a float64,
+// preserving fractional values (unlike numberOrNullInt). Returns (0,false) when
+// absent or unparseable.
+func numberOrNullFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case nil:
+		return 0, false
+	case float64:
+		return t, true
+	case int:
+		return float64(t), true
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return 0, false
+		}
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
+}
+
 func detailGet(detail map[string]any, keys ...string) any {
 	if detail == nil {
 		return nil
@@ -366,12 +414,34 @@ func mapHowenEventCodes(model string, eventCode any, detail map[string]any, alar
 		} else {
 			add("ALARM:VIBRATION")
 		}
-	case code == 15:
+	case code == 13:
+		// Geofence/electronic-fence crossing (spec §7), dispatched on the `st`
+		// sub-field. NOTE: this was previously (incorrectly) keyed on ec=15.
 		status, _ := numberOrNullInt(detailGet(detail, "st"))
 		if v, ok := m.GeofenceStatus[status]; ok {
 			add(v)
 		} else {
 			add("ZONE:UNKNOWN_EVENT")
+		}
+	case code == 15:
+		// Abnormal door open/close (spec §8): st 0=close, 1=open. (ec=15 is the
+		// door event in V4.0.0 — geofence moved to ec=13 above.)
+		if status, ok := numberOrNullInt(detailGet(detail, "st")); ok && status == 0 {
+			add("INPUT:DOOR_CLOSE")
+		} else {
+			add("ALARM:DOOR_OPEN")
+		}
+	case code == 22:
+		// Swipe card (spec §13): tp 1=driver, 2=student, 3=invalid.
+		switch sw, _ := numberOrNullInt(detailGet(detail, "tp")); sw {
+		case 1:
+			add("CARD:DRIVER")
+		case 2:
+			add("CARD:STUDENT")
+		case 3:
+			add("CARD:INVALID")
+		default:
+			add("CARD:SWIPE")
 		}
 	case code == 28:
 		voltageType, _ := numberOrNullInt(detailGet(detail, "dt", "DT", "Dt", "type", "num"))

@@ -19,7 +19,8 @@ import (
 // Cathexis device-side media listener when video is enabled. Devices dial this port
 // (a welcome identifies the serial) and then upload live H.264 (type 2) or a
 // recorded MP4 (type 5).
-func (*Protocol) NewMediaServer(addr string, mgr *media.Manager, clips *media.ClipRegistry, log *logging.Logger) gateway.MediaListener {
+func (*Protocol) NewMediaServer(addr string, mgr *media.Manager, clips *media.ClipRegistry, _ *media.SnapshotFetch, log *logging.Logger) gateway.MediaListener {
+	// Cathexis has no file-transfer/snapshot path, so the SnapshotFetch registry is ignored.
 	return &mediaServer{addr: addr, manager: mgr, clips: clips, log: log.With("tcp/cathexis-media")}
 }
 

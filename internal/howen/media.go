@@ -17,8 +17,8 @@ import (
 // NewMediaServer implements gateway.MediaServerProvider: the app runner calls it
 // (only when video is enabled) to build the device-side media listener. *MediaServer
 // satisfies gateway.MediaListener via its ListenAndServe method.
-func (*Protocol) NewMediaServer(addr string, mgr *media.Manager, clips *media.ClipRegistry, log *logging.Logger) gateway.MediaListener {
-	return &MediaServer{Addr: addr, Manager: mgr, Clips: clips, Log: log}
+func (*Protocol) NewMediaServer(addr string, mgr *media.Manager, clips *media.ClipRegistry, snaps *media.SnapshotFetch, log *logging.Logger) gateway.MediaListener {
+	return &MediaServer{Addr: addr, Manager: mgr, Clips: clips, Snaps: snaps, Log: log}
 }
 
 // MediaServer accepts the Howen media (video) connections the device opens after
@@ -27,9 +27,10 @@ func (*Protocol) NewMediaServer(addr string, mgr *media.Manager, clips *media.Cl
 // the control side sent — then streams 0x0011 frames, which are routed to the
 // matching live stream's ffmpeg.
 type MediaServer struct {
-	Addr        string              // host:port to bind (e.g. 0.0.0.0:33001)
-	Manager     *media.Manager      // where live video frames are written (HLS)
-	Clips       *media.ClipRegistry // where recorded-clip frames are written (.mp4); may be nil
+	Addr        string               // host:port to bind (e.g. 0.0.0.0:33001)
+	Manager     *media.Manager       // where live video frames are written (HLS)
+	Clips       *media.ClipRegistry  // where recorded-clip frames are written (.mp4); may be nil
+	Snaps       *media.SnapshotFetch // where file-transfer (snapshot) bytes are buffered; may be nil
 	Log         *logging.Logger
 	idleTimeout time.Duration
 }
@@ -75,6 +76,7 @@ func (ms *MediaServer) handle(conn net.Conn) {
 	r := bufio.NewReaderSize(conn, 64*1024)
 	var sessionID string
 	var isClip bool
+	var isFetch bool
 	var frames int
 
 	for {
@@ -89,6 +91,11 @@ func (ms *MediaServer) handle(conn net.Conn) {
 			// separate PLAYBACK_END. Finish is idempotent with the control-side end.
 			if isClip && ms.Clips != nil {
 				ms.Clips.Finish(sessionID)
+			}
+			// A file-transfer connection closing finalizes the fetch with whatever
+			// bytes arrived (the device may close instead of sending a 0-length end).
+			if isFetch && ms.Snaps != nil {
+				ms.Snaps.Finish(sessionID)
 			}
 			return
 		}
@@ -111,11 +118,24 @@ func (ms *MediaServer) handle(conn net.Conn) {
 			obj, _ := parseHowenJSONObject(payload)
 			sessionID = toString(obj["ss"])
 			isClip = ms.Clips != nil && ms.Clips.IsClip(sessionID)
+			isFetch = ms.Snaps != nil && ms.Snaps.IsFetch(sessionID)
 			_, _ = conn.Write(buildHowenJSONFrame(msgMediaRegisterResponse, map[string]any{"ss": sessionID, "err": "0"}))
-			ms.Log.Info(map[string]any{"event": "media_register", "ss": sessionID, "clip": isClip, "remote": conn.RemoteAddr().String()})
+			ms.Log.Info(map[string]any{"event": "media_register", "ss": sessionID, "clip": isClip, "fetch": isFetch, "remote": conn.RemoteAddr().String()})
 
 		case msgMediaData: // 0x0011 — a media frame
 			if sessionID == "" {
+				continue
+			}
+			// File transfer (0x4090): frames carry raw file bytes; a frame with no
+			// data marks end-of-file. Take all frames (not just video).
+			if isFetch {
+				mf, ok := parseHowenMediaFrame(payload)
+				if !ok || len(mf.Data) == 0 {
+					ms.Snaps.Finish(sessionID)
+					return
+				}
+				frames++
+				ms.Snaps.Write(sessionID, mf.Data)
 				continue
 			}
 			mf, ok := parseHowenMediaFrame(payload)

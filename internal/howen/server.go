@@ -210,8 +210,19 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		return nil
 
 	case msgSnapshotResponse:
-		// Snapshot response: handled in a later milestone.
-		log.Debug(map[string]any{"event": "command_response_ignored", "type": f.Type})
+		// Snapshot response (0x1020) — echoes our ss; route to the waiting
+		// RequestSnapshot, which parses the rl[] device file paths.
+		if obj, err := parseHowenJSONObject(f.Payload); err == nil {
+			s.resolveDeviceAnswer(obj)
+		}
+		return nil
+
+	case msgFileTransferResponse:
+		// File-transfer ack (0x1090) — echoes our ss; route to the waiting
+		// fetchDeviceFile. The file bytes arrive separately on the media port.
+		if obj, err := parseHowenJSONObject(f.Payload); err == nil {
+			s.resolveDeviceAnswer(obj)
+		}
 		return nil
 
 	default:
@@ -361,6 +372,16 @@ func (s *session) handleAlarmData(ctx context.Context, payload []byte) error {
 	if parsed.Status != nil {
 		s.reconcileLifecycle(ctx, parsed.Status)
 		s.recordStatus(parsed.Status)
+	}
+	// Datahub/OBD (ec=771) is periodic vehicle telemetry, not an alarm — forward
+	// it as a "gps" message with the CAN/OBD fields surfaced as sensors.
+	if isTelemetryAlarm(parsed.EC) {
+		p := buildDatahubPayload(parsed.Status, parsed.Detail, s.imei)
+		s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{
+			"event": "datahub_forward", "serial": s.serial, "ec": parsed.EC,
+		})
+		s.conn.Emit(s.serial, "howen", s.model, "gps", p)
+		return nil
 	}
 	p := buildEventPayload(s.model, parsed, s.imei)
 	s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{

@@ -51,6 +51,7 @@ type unitRuntime struct {
 	settings  *gateway.UnitSettings    // non-nil iff cfgUnit != nil
 	media     *media.Manager           // nil unless a video unit with video enabled
 	clips     *media.ClipRegistry      // nil unless a video unit with a database
+	snaps     *media.SnapshotFetch     // nil unless a video unit (in-memory file fetch)
 }
 
 // App holds the composed gateway and every long-lived dependency.
@@ -169,6 +170,8 @@ func (a *App) newUnitRuntime(proto gateway.Protocol, baseDeps gateway.Deps) *uni
 		u.mediaPort = a.resolveStoredPort(httpapi.MediaPortKey(u.name), mediaBase)
 		u.media = media.NewManager(a.cfg.HLSRoot, a.cfg.FFmpegPath, a.log)
 		u.deps.Media = u.media
+		u.snaps = media.NewSnapshotFetch()
+		u.deps.Snapshots = u.snaps
 		u.deps.MediaAdvertiseHost = net.JoinHostPort(a.cfg.MediaAdvertiseHost, strconv.Itoa(u.mediaPort))
 		u.deps.DeviceTZOffsetHours = a.cfg.DeviceTZOffsetHours
 		if a.store != nil {
@@ -280,7 +283,7 @@ func (a *App) Run() error {
 		if !ok {
 			continue
 		}
-		ms := msp.NewMediaServer(net.JoinHostPort(a.cfg.ListenHost, strconv.Itoa(u.mediaPort)), u.media, u.clips, a.log)
+		ms := msp.NewMediaServer(net.JoinHostPort(a.cfg.ListenHost, strconv.Itoa(u.mediaPort)), u.media, u.clips, u.snaps, a.log)
 		go func(ms gateway.MediaListener, name string) {
 			if err := ms.ListenAndServe(ctx); err != nil {
 				a.log.Error(map[string]any{"event": "media_fatal", "unit": name, "error": err.Error()})

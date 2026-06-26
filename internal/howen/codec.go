@@ -41,6 +41,8 @@ const (
 	msgPlayback               = 0x4070
 	msgPlaybackResponse       = 0x1070
 	msgPlaybackEnd            = 0x1071
+	msgFileTransfer           = 0x4090
+	msgFileTransferResponse   = 0x1090
 	msgParamConfig            = 0x40a0
 	msgParamConfigResponse    = 0x10a0
 	msgDeviceAnswer           = 0x1100

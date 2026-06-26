@@ -1,0 +1,204 @@
+Event Name,,Event Code,,,Howen Product Models (Y: Yes/Supported;  Blank: not supported),,,,,,,,,,,,,
+Main type,Sub type,  H-Protocol,,VSS API,MC series,ME series,,,,,,,,,MA series,,,
+,,"Main code
+(ec)","Sub Code
+(tp, dt, …)",,MC30-01,ME31-08 V5,"ME40-02 V3, V3C","ME40-02 V8, V8C",ME41-02N,"ME40-04N
+ME30-04N",ME40-04N2,"ME41-04N
+ME32-04N",ME4104AI,"ME35-04
+ME35-08",MA80-08V1,"MA80-08 V2
+MA80-08 V3",ME80-04,MA81-08
+Unknown,,0,,0,,,,,,,,,,,,,,
+video lost ,,1,,1,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+motion detection ,,2,,2,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y(onvif),,,,
+video cover,,3,,3,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y(onvif),,,,
+input trigger,ch=0,4,ch=0,220,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,ch=1,,ch=1,220,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,ch=2,,ch=2,221,Y,Y,Y,Y,,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,ch=3,,ch=3,222,,Y,,,,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,ch=4,,ch=4,223,,Y,,,,,,Y,Y,Y,Y,Y,Y,Y
+,ch=5,,ch=5,224,,Y,,,,,,Y,Y,Y,Y,Y,Y,Y
+,ch=6,,ch=6,225,,Y,,,,,,Y,Y,Y,Y,Y,Y,Y
+,ch=7,,ch=7,226,,Y,,,,,,Y,Y,Y,Y,Y,Y,Y
+,ch=8,,ch=8,227,,Y,,,,,,Y,Y,,Y,Y,Y,Y
+emergency alarm ,,5,,5,,Y,,,,,,,,,,,,
+low speed alarm ,,6,,6,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+over speed alarm ,,7,,7,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+low temperature alarm,,8,,8,,,,,,,,,,,,,,
+high temperature alarm ,,9,,9,,,,,,,,,,,,,,
+humidity alarm,,10,,10,,,,,,,,,,,,,,
+parking over time ,,11,,11,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+Vibration (Gsensor) ,x direction,12,dt=1,12,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,y direction,,dt=2,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,z direction,,dt=3,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,impact,,dt=4,217,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,rollover,,dt=5,218,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,Harsh turn,,dt=6,214,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,Harsh acceleration,,dt=7,212,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,Harsh braking,,dt=8,213,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+Geofence,0-enter,13,st=0,200,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,1-exit,,st=1,201,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,2- over-speed alarm,,st=2,202,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,3- over speed warning  ,,st=3,203,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,4-low speed alarm,,st=4,204,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,5-low speed warning,,st=5,205,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,6-forbidden parking engine star,,st=6,207,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,7-forbidden parking engine off,,st=7,208,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,8-overtime stay in geofence,,st=8,209,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,9-Pre-entry,,st=9,215,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,10- Pre-exit,,st=10,216,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+electronic route,,14,,14,,,,,,,,,,,,,,
+abnormal open/close door ,,15,,15,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+storage abnormal ,0 - Missing,16,st=0,16,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,1 -- Broken (disk partition fatal error),,st=1,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,2--The log cannot be overwritten,,st=2,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,3--Failed to write Block (EIO write error),,st=3,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,4--Disk failure (disk cannot be partitioned),,st=4,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,5--The disk cannot be mounted: the log partition cannot be mounted,,st=5,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,"6--There are too many bad blocks in disk video storage, more than 20%",,st=6,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,"7--Disk invalid block: Judge the video partition, at the beginning of formatting, or when the key information of the corresponding file is updated later",,st=7,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,"8--Disk video sampling verification failed: Failed when compare key information, after a file is finished",,st=8,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,9--Disk pauses to write video: 3 consecutive pauses will be reported once,,st=9,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,10--Disk recording overwrite exception: a kind of verification for false writing,,st=10,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,11--The disk has not recorded for a long time: no recording has been written for more than 2 minutes,,st=11,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,"12--The disk is written slowly, causing the cached data to be overwritten",,st=12,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,13-Video partition abnormality (cannot read or write normally alarm),,st=13,,Y,Y,Y,Y,Y,Y,Y,Y,Y,,,Y,Y,
+,14- Disk temperature alarm (high 70 degrees low 0 degrees alarm),,st=14,,Y,Y,Y,Y,Y,Y,Y,Y,Y,,,Y,Y,
+Overtime driving (fatigue),,17,,17,,Y,,,,,,,,,,,,
+fuel consumption abnormal ,Refuel,18,dt=1,210,,Y,,,,,,,,,Y,Y,Y,Y
+,Fuel theft,,dt=2,211,,Y,,,,,,,,,Y,Y,Y,Y
+Abnormal Fuel Level,,,,18,,,,,,,,,,,,,,
+ACC Off,,19,,19,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+GPS module abnormal ,,20,,20,,Y,,,,,,,,,Y,Y,Y,Y
+front panel open ,,21,,21,,Y,,,,,,,,,,,,
+Swipe card,Driver swipe card,22,tp=1,22,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,Student swipe card,,tp=2,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,invalid card,,tp=3,,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+IBUTTON,,23,,23,,Y,,,,,,Y,Y,,Y,Y,Y,Y
+Harsh acceleration,,24,,24,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+Harsh braking,,25,,25,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+Low speed warning,,26,,26,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+High speed warning,,27,,27,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+Voltage alarm,1-low voltage,28,dt=1,230,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,2-high voltage,,dt=2,231,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,3-Power off,,dt=3,232,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,4-Power on,,dt=4,233,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,5-Suspicious disconnection,,dt=5,234,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,6-Abnormal Shutdown,,dt=6,235,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,7-Start up,,dt=7,236,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+People counting,,29,,29,,Y,,,,,,,,,Y,Y,Y,Y
+ADAS,LDW Lane departure warning #1,30,tp=2,102,,Y,Y,Y,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y,Y(accessory),Y,Y,Y,Y
+,HMW Front vehicle distance is too close #2,,tp=3,103,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory)
+,PCW Pedestrian collision warning #1,,tp=4,104,Y,Y,Y,Y,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y,Y(accessory),Y,Y,Y,Y
+,Road sigh violation alarm #2,,tp=6,106,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory)
+,Front Vehicle Start #1,,tp=7,107,,,,,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y,Y(accessory),Y,Y,Y,Y
+,Safe distance #2,,tp=9,100,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory)
+,Road sign recognition incident #1,,tp=16,109,,,,,,,,,,,,,,
+,FCW Forward collision warning #1,,tp=17,110,Y,Y,Y,Y,Y(accessory),Y,Y,Y,Y,Y(accessory),Y,Y,Y,Y
+,HMW Front vehicle distance is too close #1,,tp=18,111,Y,Y,Y,Y,,Y,Y,Y,Y,,Y,Y,Y,Y
+DMS,Fatigue driving #1,,tp=33,115,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y,Y,Y,Y
+,Calling #1,,tp=34,116,Y,Y,Y,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y,Y(accessory),Y,Y,Y,Y
+,Smoking #1,,tp=35,117,Y,Y,Y,Y,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y,Y(accessory),Y,Y,Y,Y
+,Distracted driving #2,,tp=36,118,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory)
+,Driver abnormal #2,,tp=37,119,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y(accessory)
+,Co-driver detection,,tp=41,259,,,,Y(Customize),,,,,,,,,,
+,Driver Change/Shift,,tp=49,120,Y,Y,Y,Y,,,,,Y,,Y,Y,Y,Y
+,Eyes closing #1,,tp=65,121,Y,Y,Y,Y,,,,,Y,,Y,Y,Y,Y
+,Yawning #1,,tp=66,122,Y,Y,Y,Y,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y,Y(accessory),Y,Y,Y,Y
+,Camera cover #1,,tp=67,123,Y,Y,Y,Y,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y,Y(accessory),Y,Y,Y,Y
+,Distracted driving (glance right and left) #1,,tp=68,124,Y,Y,Y,Y,,,,,Y,,Y,Y,Y,Y
+,Not wearing a seat belt #1,,tp=69,125,Y,Y,Y,Y,,,,,Y,,Y,Y,Y,Y
+,Driver leave duty #1,,tp=70,126,Y,Y,Y,Y,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y,Y(accessory),Y,Y,Y,Y
+,Drinking water,,tp=71,127,Y,,Y,Y,,,,,Y,,Y,Y,Y,Y
+,Driver returns #1,,tp=73,129,Y,Y,Y,Y,Y(accessory),Y(accessory),Y(accessory),Y(accessory),Y,Y(accessory),Y,Y,Y,Y
+,Infrared sunglasses #1,,tp=80,130,Y,Y,Y,Y,,,,,Y,,Y,Y,Y,Y
+,Driver authentication  succeeded #1,,tp=81,131,Y,Y,Y,Y,,,,,Y,,Y,Y,Y,Y
+,Driver authentication failed #1,,tp=82,132,Y,Y,Y,Y,,,,,Y,,Y,Y,Y,Y
+,Mask not worn,,tp=85,134,,,,,,,,,,,Y,Y,Y,Y
+,Eating,,tp=87,,,,,,,,,,,,,,,
+,Frequent drowsiness (multiple nodding),,tp=88,,,,,,,,,,,,,,,
+,Frequent yawning (multiple yawning),,tp=89,,,,,,,,,,,,,,,
+,Prolonged yawning (prolonged yawning),,tp=90,,,,,,,,,,,,,,,
+,Frequent blinking (multiple blinking),,tp=91,,,,,,,,,,,,,,,
+,Prolonged blinking (prolonged blinking),,tp=92,,,,,,,,,,,,,,,
+,Level 1 Slightly closed eyes,,tp=93,,,,,,,,,,,,,,,
+,Level 2 Slightly closed eyes,,tp=94,,,,,,,,,,,,,,,
+,Severe Eye Closure,,,147,,,,,,,,,,,,,,
+,Severe Yawning,,,148,,,,,,,,,,,,,,
+BSD,BSD1 Level 1,,tp=96,135,,Y,,,,,,,,,Y(T23050902),Y(T23050902),Y(T23050902),Y
+,BSD1 Level 2,,tp=97,136,,Y,,,,,,,,,Y(T23050902),Y(T23050902),Y(T23050902),Y
+,BSD1 Level 3,,tp=98,137,,Y,,,,,,,,,Y(T23050902),Y(T23050902),Y(T23050902),Y
+,BSD2 Level 1,,tp=99,138,,Y,,,,,,,,,Y(T23050902),Y(T23050902),Y(T23050902),Y
+,BSD2 Level 2,,tp=100,139,,Y,,,,,,,,,Y(T23050902),Y(T23050902),Y(T23050902),Y
+,BSD2 Level 3,,tp=101,140,,Y,,,,,,,,,Y(T23050902),Y(T23050902),Y(T23050902),Y
+,BSD3 Level 1,,tp=102,141,,Y,,,,,,,,,,,,
+,BSD3 Level 2,,tp=103,142,,Y,,,,,,,,,,,,
+,BSD3 Level 3,,tp=104,143,,Y,,,,,,,,,,,,
+,BSD4 Level 1,,tp=105,144,,Y,,,,,,,,,,,,
+,BSD4 Level 2,,tp=106,145,,Y,,,,,,,,,,,,
+,BSD4 Level 3,,tp=107,146,,Y,,,,,,,,,,,,
+Acc on (Report once at boot,,31,,31,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+idle,,32,,32,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+Gps antenna break,,33,,33,,Y,,,,,,,,,,Y (project custom),,Y
+Gps antenna short,,34,,34,,Y,,,,,,,,,,Y (project custom),,Y
+IO output,Output 1,35,ch=1,228,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+,Output 2,,ch=2,229,,Y,,,,Y,Y,Y,Y,Y,Y,Y,Y,Y
+CANBUS connection abnormal,,36,,36,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+Towing,,37,,37,,,,,,,,,,,Y,Y,Y,Y
+Free wheeling,,38,,38,,,,,,,,,,,Y,Y,Y,Y
+RPM exceeds,,39,,39,,,,,,,,,,,Y,Y,Y,Y
+Vehicle Move,,40,,40,,,,,,,,,,,Y,Y,Y,Y
+Trip start（st/et/dtu time same）,,41,,41,,Y,,,,,,,,,Y,Y,Y,Y
+In trip,,42,,42,,Y,,,,,,,,,Y,Y,Y,Y
+Trip ends (periodically report after acc off),,43,,43,,Y,,,,,,,,,Y,Y,Y,Y
+GPS location recover,,44,,44,Y,Y,Y,Y,,Y,Y,Y,Y,,Y,Y,Y,Y
+Video abnormal,,45,,45,,Y,,,,,,,,,,,,
+None trip position (report periodically after trip ends),,46,,46,,Y,,,,,,,,,Y,Y,Y,Y
+"Main unit anomly (Device not connected for long time, periodical alarms)",,47,,47,,,,,,,,,,,,,,
+Excessive overspeed,,48,,48,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+Load alarm,,49,,49,,Y,Y,Y,,,Y,Y,Y,,,,,
+SIM Card Lost,,50,,50,Y,Y,Y,Y,Y,Y,Y,Y,Y,,,,,
+Tracker seat belt alarm,,51,,51,,,,,,,,,,,,,,
+Tracker harsh acceleration,,52,,52,,,,,,,,,,,,,,
+Tracker harsh braking,,53,,53,,,,,,,,,,,,,,
+Tracker overspeed,,54,,54,,,,,,,,,,,,,,
+Tracker excessive overspeed,,55,,55,,,,,,,,,,,,,,
+Tracker panel open,,56,,56,,,,,,,,,,,,,,
+Roaming Mode start,,57,,57,,Y,,,,,,,,,,,,
+Roaming Mode end,,58,,58,,Y,,,,,,,,,,,,
+Wake up event,,59,,59,,Y,,,,,,,,,,,,
+Satellite Modem status,,60,,60,,Y,,,,,,,,,,,,
+Alcohol detection alarm,,61,,61,,Y,,,,,,,,,,,,
+Total driving time exceeded,,62,,62,,,,,,,,,,,,,,
+(Tracker) RPM too high,,63,,63,,,,,,,,,,,,,,
+(Tracker) impact,,64,,64,,,,,,,,,,,,,,
+(Tracker) traction,,65,,65,,,,,,,,,,,,,,
+(Tracker) false disconnection,,66,,66,,,,,,,,,,,,,,
+(Tracker) displacement,,67,,67,,,,,,,,,,,,,,
+(Tracker) idling,,68,,68,,,,,,,,,,,,,,
+(Tracker) rollover,,69,,69,,,,,,,,,,,,,,
+(Tracker) emergency warning,,70,,70,,,,,,,,,,,,,,
+(Tracker) harsh cornering,,71,,71,,,,,,,,,,,,,,
+Unbelted right rear seatbelt,,72,,,,,,,,,,,,,,,,
+Unbelted middle rear seatbelt,,73,,,,,,,,,,,,,,,,
+Unbelted left rear seatbelt,,74,,,,,,,,,,,,,,,,
+DLT card not swiped,,75,,,,,,,,,,,,,,,,
+GPS signal interfered,,76,,76,,,,,,,,,,,,,,
+AI camera installation self-check abormal,,78,,78,,,,,,,,,,,,,,
+AI Watch abnormal,,79,,79,,,,,,,,,,,,,,
+ADAS auto calibrate,,80,,,,,,,,,,,,,,,,
+Trip notification,,768,,768,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+Tire pressure notification,,769,,769,,Y(accessory) ,Y(accessory) ,Y(accessory) ,Y(accessory) ,Y(accessory) ,Y(accessory) ,Y(accessory) ,Y(accessory) ,Y(accessory) ,Y(accessory) ,Y(accessory) ,Y(accessory) ,Y(accessory) 
+Disk detection alarm,,770,,770,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y,Y
+Datahub status notification,,771,,,,,,,,,,,,,,,,
+Device self-check notification,,772,,,,,,,,,,,,,,,,
+"Alarm files (.jpg, video in invisible partition .avi) can be played back online",,1280,,,,,,,,,,,,,,,,
+Timed snapshots,,1281,,,,,,,,,,,,,,,,
+"Alarm-linked short videos (.jgp, video in visible partition .mp4), cannot be played back online",,1282,,,,,,,,,,,,,,,,
+Platform Virtual alarm,Vehicel long time offline,,,11003,,,,,,,,,,,,,,
+,Tranmission break,,,11004,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,
+Remark:,,,,,,,,,,,,,,,,,,
+1),"The compliance of alarm types for product models, might change by time, update of table might be with delay",,,,,,,,,,,,,,,,,
+2),"Alarm types with grey background: are not completed yet, or for specific accessories. For 1st phase integration, we suggest to ignore. ",,,,,,,,,,,,,,,,,
+3),"19 ACC Off: compatible with old firmwares. In old firmwares: During ACC-off delay, if ignites (et > st), will report “accoff ends”; in new firmware: During ACC-off delay, if ignites (et > st), will report “accon”)",,,,,,,,,,,,,,,,,

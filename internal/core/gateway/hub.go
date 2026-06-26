@@ -144,6 +144,19 @@ func (h *Hub) Video(serial string) (VideoController, bool) {
 	return vc, ok
 }
 
+// Snapshotter returns a connected device's snapshot capability, if its session
+// supports on-demand still-image capture.
+func (h *Hub) Snapshotter(serial string) (Snapshotter, bool) {
+	h.mu.RLock()
+	e, ok := h.entries[serial]
+	h.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	s, ok := e.commander.(Snapshotter)
+	return s, ok
+}
+
 // Status returns a connected device's latest status snapshot, if its session
 // reports one.
 func (h *Hub) Status(serial string) (map[string]any, bool) {
