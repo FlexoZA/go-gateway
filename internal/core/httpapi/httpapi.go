@@ -163,17 +163,18 @@ type UnitInfo struct {
 
 // Server is the HTTP API server.
 type Server struct {
-	addr          string
-	units         []UnitInfo // hosted unit types
-	defaultUnit   string     // units[0].Name — back-compat default for unit-scoped routes
-	log           *logging.Logger
-	verifier      KeyVerifier
-	data          DataStore
-	hub           *gateway.Hub
-	internalToken string
-	hlsRoot       string
-	clipsRoot     string
-	srv           *http.Server
+	addr             string
+	units            []UnitInfo // hosted unit types
+	defaultUnit      string     // units[0].Name — back-compat default for unit-scoped routes
+	log              *logging.Logger
+	verifier         KeyVerifier
+	data             DataStore
+	hub              *gateway.Hub
+	internalToken    string
+	hlsRoot          string
+	clipsRoot        string
+	playlistObserver func(relPath string) // notified when a viewer fetches an HLS playlist
+	srv              *http.Server
 }
 
 // unitNames returns the set of hosted unit-type names.
@@ -206,6 +207,12 @@ func (s *Server) SetHLSRoot(dir string) { s.hlsRoot = dir }
 // SetClipsRoot sets the directory recorded-clip .mp4 files are stored under (the
 // bucket), used by the clip download handler.
 func (s *Server) SetClipsRoot(dir string) { s.clipsRoot = dir }
+
+// SetPlaylistObserver registers a callback invoked with the playlist's path
+// (relative to the HLS root) each time a viewer fetches an HLS playlist. The
+// media reaper uses this as the "viewer still watching" signal so it can stop a
+// live stream the browser walked away from.
+func (s *Server) SetPlaylistObserver(fn func(relPath string)) { s.playlistObserver = fn }
 
 // New builds the API server. units are the hosted unit types (name + effective
 // capabilities + optional settings schema); the first is the back-compat default
@@ -619,6 +626,11 @@ func (s *Server) handleHLS(w http.ResponseWriter, r *http.Request) {
 	case ".m3u8":
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-cache")
+		// A playlist fetch means a viewer is still watching — feed the media
+		// reaper so it doesn't stop a stream that's actively being played.
+		if s.playlistObserver != nil {
+			s.playlistObserver(strings.TrimPrefix(r.URL.Path, "/api/hls/"))
+		}
 	case ".ts":
 		w.Header().Set("Content-Type", "video/mp2t")
 	}

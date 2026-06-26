@@ -286,6 +286,9 @@ func (a *App) Run() error {
 				a.log.Error(map[string]any{"event": "media_fatal", "unit": name, "error": err.Error()})
 			}
 		}(ms, u.name)
+		// Reap live streams abandoned by the device (media connection dropped) or
+		// the viewer (browser left without stopping) so ffmpeg can't pile up.
+		u.media.StartReaper(ctx)
 	}
 
 	a.log.Info(map[string]any{"event": "starting", "units": a.unitNames(), "device_auth_mode": a.authMode})
@@ -449,6 +452,15 @@ func (a *App) startHTTPAPI(ctx context.Context) {
 		if vu.clips != nil {
 			api.SetClipsRoot(a.cfg.ClipsRoot)
 		}
+		// Forward playlist fetches to every video unit's media manager as the
+		// viewer-liveness signal for the reaper; each ignores paths it doesn't own.
+		api.SetPlaylistObserver(func(relPath string) {
+			for _, u := range a.units {
+				if u.media != nil {
+					u.media.TouchPlaylistPath(relPath)
+				}
+			}
+		})
 	}
 	go func() {
 		if err := api.Run(ctx); err != nil {

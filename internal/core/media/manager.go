@@ -5,6 +5,7 @@
 package media
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -57,13 +58,15 @@ type Stream struct {
 	codec   string // input codec for clips: "h264" or "hevc"
 	Started time.Time
 
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	done    chan struct{} // closed once ffmpeg has exited (clip finalize waits on it)
-	running bool          // ffmpeg spawned
-	closed  bool
-	bytes   int64
+	mu         sync.Mutex
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	done       chan struct{} // closed once ffmpeg has exited (clip finalize waits on it)
+	running    bool          // ffmpeg spawned
+	closed     bool
+	bytes      int64
+	lastWrite  time.Time // last time a frame was written (device liveness)
+	lastAccess time.Time // last time a viewer fetched the playlist (viewer liveness)
 }
 
 // Register creates (or replaces) a stream entry and its output directory. ffmpeg
@@ -188,6 +191,98 @@ func (m *Manager) Stop(id string) {
 	}
 }
 
+// liveReapIdle is how long a live stream may look abandoned — no frames from the
+// device AND no playlist fetch from a viewer — before the reaper stops it. It is
+// generous relative to the media-connection idle timeout (60s) and a player's
+// ~2s playlist poll, so a healthy stream is never reaped.
+const liveReapIdle = 90 * time.Second
+
+// liveReapInterval is how often the reaper scans for abandoned streams.
+const liveReapInterval = 30 * time.Second
+
+// StartReaper runs a background loop that stops abandoned LIVE streams until ctx
+// is cancelled. A live stream leaks its ffmpeg two ways: the device's media
+// connection drops (frames stop, ffmpeg blocks on stdin forever), or the browser
+// navigates away without calling stop (the device keeps streaming to nobody).
+// The reaper catches both — it stops a live stream once both its last frame and
+// its last playlist fetch are older than liveReapIdle. Clips are never touched
+// here; they finalize on PLAYBACK_END or media-connection close.
+func (m *Manager) StartReaper(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(liveReapInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				m.reapIdle(time.Now(), liveReapIdle)
+			}
+		}
+	}()
+}
+
+// reapIdle stops every live stream idle for longer than idle as of now.
+func (m *Manager) reapIdle(now time.Time, idle time.Duration) {
+	var dead []string
+	m.mu.Lock()
+	for id, s := range m.streams {
+		if s.outFile != "" {
+			continue // a clip — finalized by the clip pipeline, not reaped here
+		}
+		if s.idleFor(now) > idle {
+			dead = append(dead, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range dead {
+		m.log.Info(map[string]any{"event": "stream_reaped", "id": id, "reason": "idle"})
+		m.Stop(id)
+	}
+}
+
+// idleFor reports how long a live stream has looked abandoned: the longer of
+// "no frame written" and "no playlist fetched", each measured from the stream's
+// start until that event first happens. A healthy live view both receives frames
+// and is polled by a player, so its idle stays near zero; if either signal goes
+// quiet the idle climbs and the stream is reaped.
+func (s *Stream) idleFor(now time.Time) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	frameRef := s.lastWrite
+	if frameRef.IsZero() {
+		frameRef = s.Started
+	}
+	accessRef := s.lastAccess
+	if accessRef.IsZero() {
+		accessRef = s.Started
+	}
+	idle := now.Sub(frameRef)
+	if a := now.Sub(accessRef); a > idle {
+		idle = a
+	}
+	return idle
+}
+
+// TouchPlaylistPath marks the live stream whose HLS output is relPath (e.g.
+// "<serial>/<camera>/<profile>/stream.m3u8", relative to the HLS root) as still
+// being watched, resetting its viewer-idle clock. Called when the HTTP API
+// serves a playlist. Unknown paths (e.g. another unit's stream) are ignored.
+func (m *Manager) TouchPlaylistPath(relPath string) {
+	dir := filepath.Dir(filepath.Join(m.hlsRoot, relPath))
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.streams {
+		if s.outFile == "" && s.Dir == dir {
+			s.mu.Lock()
+			s.lastAccess = now
+			s.mu.Unlock()
+			return
+		}
+	}
+}
+
 // Status reports a stream's liveness for the API.
 func (m *Manager) Status(id string) (map[string]any, bool) {
 	s, ok := m.Get(id)
@@ -215,6 +310,7 @@ func (s *Stream) write(m *Manager, data []byte) error {
 		}
 		s.running = true
 	}
+	s.lastWrite = time.Now()
 	n, err := s.stdin.Write(data)
 	s.bytes += int64(n)
 	return err
