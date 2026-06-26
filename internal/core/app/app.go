@@ -356,6 +356,36 @@ func (a *App) anyMedia() *unitRuntime {
 	return nil
 }
 
+// streamAggregator implements httpapi.StreamLister across every video unit's
+// media manager, so GET /api/streams and POST /api/streams/stop-all see all
+// active live streams in one process.
+type streamAggregator struct{ units []*unitRuntime }
+
+func (a streamAggregator) ActiveStreams() []httpapi.ActiveStream {
+	out := []httpapi.ActiveStream{}
+	for _, u := range a.units {
+		if u.media == nil {
+			continue
+		}
+		for _, ls := range u.media.ActiveStreams() {
+			out = append(out, httpapi.ActiveStream{
+				Unit: u.name, Serial: ls.Serial, Camera: ls.Camera, Profile: ls.Profile, UptimeMs: ls.UptimeMs,
+			})
+		}
+	}
+	return out
+}
+
+func (a streamAggregator) StopAllStreams() int {
+	n := 0
+	for _, u := range a.units {
+		if u.media != nil {
+			n += u.media.StopAllLive()
+		}
+	}
+	return n
+}
+
 // startStoreBackedServices wires everything that needs the database: per-unit
 // editable mappings + unit settings (each with instant LISTEN/NOTIFY
 // reload), and the global event-code picklist, telemetry webhooks, and live server
@@ -461,6 +491,8 @@ func (a *App) startHTTPAPI(ctx context.Context) {
 				}
 			}
 		})
+		// Active-stream count / stop-all, aggregated across every video unit.
+		api.SetStreamLister(streamAggregator{units: a.units})
 	}
 	go func() {
 		if err := api.Run(ctx); err != nil {

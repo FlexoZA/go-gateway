@@ -174,7 +174,24 @@ type Server struct {
 	hlsRoot          string
 	clipsRoot        string
 	playlistObserver func(relPath string) // notified when a viewer fetches an HLS playlist
+	streams          StreamLister         // enumerate/stop active live streams; nil when no unit has video
 	srv              *http.Server
+}
+
+// ActiveStream is one running live stream, surfaced by GET /api/streams.
+type ActiveStream struct {
+	Unit     string `json:"unit"`
+	Serial   string `json:"serial"`
+	Camera   int    `json:"camera"`
+	Profile  int    `json:"profile"`
+	UptimeMs int64  `json:"uptime_ms"`
+}
+
+// StreamLister enumerates and stops active live streams across all video units.
+// The app implements it by aggregating the per-unit media managers.
+type StreamLister interface {
+	ActiveStreams() []ActiveStream
+	StopAllStreams() int
 }
 
 // unitNames returns the set of hosted unit-type names.
@@ -213,6 +230,10 @@ func (s *Server) SetClipsRoot(dir string) { s.clipsRoot = dir }
 // media reaper uses this as the "viewer still watching" signal so it can stop a
 // live stream the browser walked away from.
 func (s *Server) SetPlaylistObserver(fn func(relPath string)) { s.playlistObserver = fn }
+
+// SetStreamLister wires the active-stream enumerator/stopper used by
+// GET /api/streams and POST /api/streams/stop-all. Empty/nil = no active streams.
+func (s *Server) SetStreamLister(l StreamLister) { s.streams = l }
 
 // New builds the API server. units are the hosted unit types (name + effective
 // capabilities + optional settings schema); the first is the back-compat default
@@ -274,6 +295,9 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		"POST /api/units/{serial}/stream/start": s.handleStreamStart,
 		"POST /api/units/{serial}/stream/stop":  s.handleStreamStop,
 		"GET /api/hls/":                         s.handleHLS,
+		// Active live streams across all units (count / stop-all).
+		"GET /api/streams":           s.handleStreamsList,
+		"POST /api/streams/stop-all": s.handleStreamsStopAll,
 
 		// Discover what footage a device has (file query) before requesting a clip.
 		"GET /api/units/{serial}/recordings": s.handleQueryRecordings,
@@ -597,6 +621,27 @@ func (s *Server) handleStreamStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// GET /api/streams — list the live streams currently running across all units.
+func (s *Server) handleStreamsList(w http.ResponseWriter, r *http.Request) {
+	list := []ActiveStream{}
+	if s.streams != nil {
+		if active := s.streams.ActiveStreams(); active != nil {
+			list = active
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"streams": list, "count": len(list)})
+}
+
+// POST /api/streams/stop-all — stop every active live stream (e.g. to free server
+// resources). Returns how many were stopped. Clips are unaffected.
+func (s *Server) handleStreamsStopAll(w http.ResponseWriter, r *http.Request) {
+	stopped := 0
+	if s.streams != nil {
+		stopped = s.streams.StopAllStreams()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "stopped": stopped})
 }
 
 func (s *Server) writeStreamError(w http.ResponseWriter, err error) {

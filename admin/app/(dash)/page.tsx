@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
+import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner, statusTone } from "@/components/ui";
@@ -20,18 +22,47 @@ export default function DashboardPage() {
   const units = useFetch<{ units: Unit[] }>("units", 5000);
   const devices = useFetch<{ devices: any[] }>("devices", 10000);
   const pending = useFetch<{ devices: any[] }>("devices/pending", 10000);
+  const streams = useFetch<{ count: number; streams: any[] }>("streams", 5000);
 
   const connected = units.data?.units ?? [];
   const standby = connected.filter((u) => u.state === "sleep").length;
+  const streamCount = streams.data?.count ?? 0;
+
+  const [stopping, setStopping] = useState(false);
+  const [stopErr, setStopErr] = useState<string | null>(null);
+  async function stopAllStreams() {
+    if (!confirm(`Stop all ${streamCount} active live stream(s)? Any open live views will end.`)) return;
+    setStopping(true);
+    setStopErr(null);
+    try {
+      await api("streams/stop-all", { method: "POST" });
+      await streams.refresh();
+    } catch (e: any) {
+      setStopErr(e.message || "Failed to stop streams");
+    } finally {
+      setStopping(false);
+    }
+  }
 
   return (
     <div>
-      <PageHeader title="Dashboard" subtitle="Live connectivity and registry overview" />
-      <ErrorBanner message={units.error} />
+      <PageHeader
+        title="Dashboard"
+        subtitle="Live connectivity and registry overview"
+        action={
+          streamCount > 0 ? (
+            <button className="btn-danger" onClick={stopAllStreams} disabled={stopping}>
+              {stopping ? "Stopping…" : `Stop all streams (${streamCount})`}
+            </button>
+          ) : undefined
+        }
+      />
+      <ErrorBanner message={units.error || stopErr} />
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Connected now" value={connected.length} tone="green" badge="live" />
         <Stat label="In standby" value={standby} tone="amber" badge="standby" />
+        <Stat label="Active streams" value={streamCount} tone="green" badge="streaming" />
         <Stat label="Approved devices" value={devices.data?.devices?.length ?? "—"} tone="indigo" badge="registry" />
         <Stat label="Pending approval" value={pending.data?.devices?.length ?? "—"} tone="amber" badge="pending" />
       </div>

@@ -298,6 +298,54 @@ func (m *Manager) Status(id string) (map[string]any, bool) {
 	}, true
 }
 
+// LiveStream describes one active live stream for the management API.
+type LiveStream struct {
+	ID       string `json:"id"`
+	Serial   string `json:"serial"`
+	Camera   int    `json:"camera"`
+	Profile  int    `json:"profile"`
+	UptimeMs int64  `json:"uptime_ms"`
+	Bytes    int64  `json:"bytes"`
+}
+
+// ActiveStreams returns the currently-registered LIVE streams (clips excluded).
+func (m *Manager) ActiveStreams() []LiveStream {
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []LiveStream{}
+	for _, s := range m.streams {
+		if s.outFile != "" {
+			continue // a clip, not a live stream
+		}
+		s.mu.Lock()
+		out = append(out, LiveStream{
+			ID: s.ID, Serial: s.Serial, Camera: s.Camera, Profile: s.Profile,
+			UptimeMs: now.Sub(s.Started).Milliseconds(), Bytes: s.bytes,
+		})
+		s.mu.Unlock()
+	}
+	return out
+}
+
+// StopAllLive stops every active LIVE stream and returns how many were stopped.
+// Clips are left to finalize through the clip pipeline. Devices stop sending once
+// their media connection drops on the next failed frame write.
+func (m *Manager) StopAllLive() int {
+	m.mu.Lock()
+	ids := make([]string, 0, len(m.streams))
+	for id, s := range m.streams {
+		if s.outFile == "" {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range ids {
+		m.Stop(id)
+	}
+	return len(ids)
+}
+
 func (s *Stream) write(m *Manager, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
