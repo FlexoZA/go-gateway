@@ -16,6 +16,7 @@ type Unit = {
   state?: string;
   commands: string[];
 };
+type PortStatus = { unit: string; kind: string; port: number; listening: boolean };
 
 export default function DashboardPage() {
   const info = useGatewayInfo();
@@ -23,8 +24,10 @@ export default function DashboardPage() {
   const devices = useFetch<{ devices: any[] }>("devices", 10000);
   const pending = useFetch<{ devices: any[] }>("devices/pending", 10000);
   const streams = useFetch<{ count: number; streams: any[] }>("streams", 5000);
+  const ports = useFetch<{ ports: PortStatus[] }>("ports", 15000);
 
   const connected = units.data?.units ?? [];
+  const portList = ports.data?.ports ?? [];
   const standby = connected.filter((u) => u.state === "sleep").length;
   const streamCount = streams.data?.count ?? 0;
 
@@ -66,6 +69,28 @@ export default function DashboardPage() {
         <Stat label="Approved devices" value={devices.data?.devices?.length ?? "—"} tone="indigo" badge="registry" />
         <Stat label="Pending approval" value={pending.data?.devices?.length ?? "—"} tone="amber" badge="pending" />
       </div>
+
+      {portList.length > 0 && (
+        <div className="card mb-6">
+          <div className="mb-3 flex items-baseline justify-between">
+            <h2 className="text-sm font-semibold text-slate-300">Device port listeners</h2>
+            <span className="text-xs text-slate-500">gateway self-check (container-internal)</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {portList.map((p) => (
+              <div
+                key={`${p.unit}-${p.kind}-${p.port}`}
+                className="flex items-center gap-2 rounded-md border border-edge bg-panel/60 px-3 py-1.5 text-sm"
+              >
+                <span className="font-mono text-slate-200">{p.unit}</span>
+                <span className="text-slate-400">{p.kind}</span>
+                <span className="font-mono text-slate-300">:{p.port}</span>
+                <Badge tone={p.listening ? "green" : "rose"}>{p.listening ? "listening" : "down"}</Badge>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <h2 className="mb-3 text-sm font-semibold text-slate-300">Connected devices</h2>
       {units.loading ? (

@@ -386,6 +386,19 @@ func (a streamAggregator) StopAllStreams() int {
 	return n
 }
 
+// DevicePorts implements httpapi.PortLister: each unit's resolved device control
+// port, plus the media port for video units.
+func (a *App) DevicePorts() []httpapi.PortInfo {
+	out := []httpapi.PortInfo{}
+	for _, u := range a.units {
+		out = append(out, httpapi.PortInfo{Unit: u.name, Kind: "control", Port: u.port})
+		if u.media != nil {
+			out = append(out, httpapi.PortInfo{Unit: u.name, Kind: "media", Port: u.mediaPort})
+		}
+	}
+	return out
+}
+
 // startStoreBackedServices wires everything that needs the database: per-unit
 // editable mappings + unit settings (each with instant LISTEN/NOTIFY
 // reload), and the global event-code picklist, telemetry webhooks, and live server
@@ -477,6 +490,7 @@ func (a *App) startHTTPAPI(ctx context.Context) {
 	if a.cfg.InternalAPIToken != "" {
 		a.log.Info(map[string]any{"event": "internal_token_enabled"})
 	}
+	api.SetPortLister(a) // device-facing port listeners + reachability self-check
 	if vu := a.anyMedia(); vu != nil {
 		api.SetHLSRoot(a.cfg.HLSRoot)
 		if vu.clips != nil {

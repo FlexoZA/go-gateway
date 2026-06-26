@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dfm/device-gateway/internal/core/gateway"
@@ -175,7 +176,21 @@ type Server struct {
 	clipsRoot        string
 	playlistObserver func(relPath string) // notified when a viewer fetches an HLS playlist
 	streams          StreamLister         // enumerate/stop active live streams; nil when no unit has video
+	ports            PortLister           // device-facing ports to report a listening check for
 	srv              *http.Server
+}
+
+// PortInfo is one device-facing TCP port the gateway listens on.
+type PortInfo struct {
+	Unit string `json:"unit"`
+	Kind string `json:"kind"` // "control" | "media"
+	Port int    `json:"port"`
+}
+
+// PortLister reports the device-facing ports the gateway is configured to listen
+// on (per unit's resolved control/media port). Implemented by the app.
+type PortLister interface {
+	DevicePorts() []PortInfo
 }
 
 // ActiveStream is one running live stream, surfaced by GET /api/streams.
@@ -234,6 +249,9 @@ func (s *Server) SetPlaylistObserver(fn func(relPath string)) { s.playlistObserv
 // SetStreamLister wires the active-stream enumerator/stopper used by
 // GET /api/streams and POST /api/streams/stop-all. Empty/nil = no active streams.
 func (s *Server) SetStreamLister(l StreamLister) { s.streams = l }
+
+// SetPortLister wires the device-facing port list reported by GET /api/ports.
+func (s *Server) SetPortLister(l PortLister) { s.ports = l }
 
 // New builds the API server. units are the hosted unit types (name + effective
 // capabilities + optional settings schema); the first is the back-compat default
@@ -298,6 +316,8 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		// Active live streams across all units (count / stop-all).
 		"GET /api/streams":           s.handleStreamsList,
 		"POST /api/streams/stop-all": s.handleStreamsStopAll,
+		// Device-facing port listeners + a self-check that each is accepting.
+		"GET /api/ports": s.handlePortsList,
 
 		// Discover what footage a device has (file query) before requesting a clip.
 		"GET /api/units/{serial}/recordings": s.handleQueryRecordings,
@@ -642,6 +662,43 @@ func (s *Server) handleStreamsStopAll(w http.ResponseWriter, r *http.Request) {
 		stopped = s.streams.StopAllStreams()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "stopped": stopped})
+}
+
+// GET /api/ports — each device-facing port the gateway listens on, with a
+// listening self-check (a short loopback dial confirming the listener accepts).
+// Checks the container-internal listener, so it catches a crashed/unbound port
+// but not a Docker-publish or firewall mismatch.
+func (s *Server) handlePortsList(w http.ResponseWriter, r *http.Request) {
+	type portStatus struct {
+		PortInfo
+		Listening bool `json:"listening"`
+	}
+	out := []portStatus{}
+	if s.ports != nil {
+		list := s.ports.DevicePorts()
+		out = make([]portStatus, len(list))
+		var wg sync.WaitGroup
+		for i, p := range list {
+			wg.Add(1)
+			go func(i int, p PortInfo) {
+				defer wg.Done()
+				out[i] = portStatus{PortInfo: p, Listening: portListening(p.Port)}
+			}(i, p)
+		}
+		wg.Wait()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ports": out})
+}
+
+// portListening reports whether something is accepting TCP connections on the
+// gateway's own port (loopback dial, short timeout).
+func portListening(port int) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func (s *Server) writeStreamError(w http.ResponseWriter, err error) {
