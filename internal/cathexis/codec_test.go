@@ -39,8 +39,8 @@ func TestParseEnvelope(t *testing.T) {
 func TestParseVideoFrame(t *testing.T) {
 	p := make([]byte, videoHdrV1+3)
 	binary.LittleEndian.PutUint32(p[0:4], magicVideoV1)
-	binary.LittleEndian.PutUint32(p[4:8], 1)  // camera
-	binary.LittleEndian.PutUint32(p[8:12], 0) // profile
+	binary.LittleEndian.PutUint32(p[4:8], 1)   // camera
+	binary.LittleEndian.PutUint32(p[8:12], 0)  // profile
 	binary.LittleEndian.PutUint32(p[32:36], 1) // frameType = I
 	binary.LittleEndian.PutUint32(p[40:44], 0) // metaSize
 	p[videoHdrV1], p[videoHdrV1+1], p[videoHdrV1+2] = 0xAA, 0xBB, 0xCC

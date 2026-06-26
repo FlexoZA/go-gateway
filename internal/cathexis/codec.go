@@ -12,13 +12,14 @@ import (
 // Every message on every connection (control + media) is a 12-byte little-endian
 // header — magic 0x12ab34cd, type uint32, size uint32 — followed by `size` bytes
 // of payload. Frame types:
-//   0  heartbeat (no payload)
-//   1  JSON: {"message":{"type":..,"payload":{..}}} (welcome/gps/event/command resp)
-//   2  live video (H.264) with a FACEDEAD/FACEDEAE sub-header
-//   3  live audio (AAC) — ignored in v1
-//   5  clip upload chunk (finished MP4) with a 0xDEAF1234 sub-header
-//   15 event-preview JPEG — ignored in v1
-//   16 ACK (control welcome ack; size 0)
+//
+//	0  heartbeat (no payload)
+//	1  JSON: {"message":{"type":..,"payload":{..}}} (welcome/gps/event/command resp)
+//	2  live video (H.264) with a FACEDEAD/FACEDEAE sub-header
+//	3  live audio (AAC) — ignored in v1
+//	5  clip upload chunk (finished MP4) with a 0xDEAF1234 sub-header
+//	15 event-preview JPEG — ignored in v1
+//	16 ACK (control welcome ack; size 0)
 const (
 	headerSize = 12
 	magic      = 0x12ab34cd
