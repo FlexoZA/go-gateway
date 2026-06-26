@@ -8,6 +8,7 @@ import { StatusPill } from "./status-pill";
 import { formatRelative } from "@/lib/console/time";
 import { usePersistedState } from "@/lib/usePersistedState";
 import { STORAGE_KEYS } from "@/lib/console/storage";
+import { useConfirm } from "@/components/confirm";
 import type { Collection } from "@/lib/console/types";
 
 type SidebarTab = "collections" | "history";
@@ -30,6 +31,7 @@ export function Sidebar() {
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
+  const confirm = useConfirm();
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -165,8 +167,15 @@ export function Sidebar() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (confirm(`Delete collection "${c.name}"?`)) deleteCollection(c.id);
+                      onClick={async () => {
+                        if (
+                          await confirm({
+                            title: "Delete collection?",
+                            body: `“${c.name}” and its saved requests will be removed.`,
+                            confirmLabel: "Delete",
+                          })
+                        )
+                          deleteCollection(c.id);
                       }}
                       className="hidden text-xs text-slate-500 hover:text-rose-300 group-hover:inline"
                       title="Delete"

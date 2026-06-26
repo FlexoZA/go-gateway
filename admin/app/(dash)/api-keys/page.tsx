@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useConfirm } from "@/components/confirm";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
@@ -18,6 +19,7 @@ export default function APIKeysPage() {
   const { data, error, loading, refresh } = useFetch<{ api_keys: APIKey[] }>("api-keys");
   const [actionError, setActionError] = useState<string | null>(null);
   const [newKey, setNewKey] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const keys = data?.api_keys ?? [];
 
@@ -83,8 +85,15 @@ export default function APIKeysPage() {
                         {k.is_active ? (
                           <button
                             className="btn-danger"
-                            onClick={() => {
-                              if (confirm(`Revoke key "${k.name || k.prefix}"? Any system using it will stop working immediately.`)) revoke(k.prefix);
+                            onClick={async () => {
+                              if (
+                                await confirm({
+                                  title: "Revoke API key?",
+                                  body: `“${k.name || k.prefix}” — any system using it will stop working immediately.`,
+                                  confirmLabel: "Revoke",
+                                })
+                              )
+                                revoke(k.prefix);
                             }}
                           >
                             Revoke

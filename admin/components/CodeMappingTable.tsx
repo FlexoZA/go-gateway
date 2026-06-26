@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useConfirm } from "@/components/confirm";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { Empty, ErrorBanner, Spinner } from "@/components/ui";
@@ -147,6 +148,7 @@ function MappingRow({
   const [eventCode, setEventCode] = useState(m.event_code);
   const [description, setDescription] = useState(m.description);
   const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
 
   useEffect(() => {
     setEventCode(m.event_code);
@@ -184,7 +186,14 @@ function MappingRow({
             className="btn-ghost"
             disabled={busy}
             onClick={async () => {
-              if (!confirm(`Reset ${m.map_type} code ${m.code} to the built-in default?`)) return;
+              if (
+                !(await confirm({
+                  title: "Reset mapping?",
+                  body: `Reset ${m.map_type} code ${m.code} to the built-in default?`,
+                  confirmLabel: "Reset",
+                }))
+              )
+                return;
               setBusy(true);
               await onDelete(m.map_type, m.code);
               setBusy(false);

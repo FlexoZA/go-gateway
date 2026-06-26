@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { useConfirm } from "@/components/confirm";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner, statusTone } from "@/components/ui";
@@ -14,6 +15,7 @@ export default function DevicesPage() {
   const pending = useFetch<{ devices: Pending[] }>("devices/pending", 8000);
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   async function act(method: string, path: string, key: string) {
     setBusy(key);
@@ -128,8 +130,14 @@ export default function DevicesPage() {
                       <button
                         className="btn-danger"
                         disabled={busy === d.serial}
-                        onClick={() => {
-                          if (confirm(`Remove ${d.serial} from the registry?`)) {
+                        onClick={async () => {
+                          if (
+                            await confirm({
+                              title: "Remove device?",
+                              body: `${d.serial} will be removed from the registry.`,
+                              confirmLabel: "Remove",
+                            })
+                          ) {
                             act("DELETE", `devices/${encodeURIComponent(d.serial)}`, d.serial);
                           }
                         }}

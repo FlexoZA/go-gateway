@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useConfirm } from "@/components/confirm";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
@@ -78,6 +79,7 @@ function UserRow({
 }) {
   const [resetting, setResetting] = useState(false);
   const [pw, setPw] = useState("");
+  const confirm = useConfirm();
 
   return (
     <tr>
@@ -122,8 +124,15 @@ function UserRow({
             </button>
             <button
               className="btn-danger"
-              onClick={() => {
-                if (confirm(`Delete user ${user.email}?`)) onDelete();
+              onClick={async () => {
+                if (
+                  await confirm({
+                    title: "Delete user?",
+                    body: `${user.email} will lose access immediately.`,
+                    confirmLabel: "Delete",
+                  })
+                )
+                  onDelete();
               }}
             >
               Delete

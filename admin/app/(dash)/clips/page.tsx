@@ -2,6 +2,7 @@
 
 import { Fragment, useState } from "react";
 import { api } from "@/lib/api";
+import { useConfirm } from "@/components/confirm";
 import { useFetch } from "@/lib/useFetch";
 import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
@@ -48,6 +49,7 @@ export default function ClipsPage() {
   const units = useFetch<{ units: Unit[] }>("units", 8000);
   const clips = useFetch<{ clips: Clip[] }>("clips", 4000);
   const range = defaultRange();
+  const confirm = useConfirm();
 
   const [serial, setSerial] = useState("");
   const [camera, setCamera] = useState(0);
@@ -163,7 +165,7 @@ export default function ClipsPage() {
   }
 
   async function remove(id: number) {
-    if (!confirm("Delete this clip and its file?")) return;
+    if (!(await confirm({ title: "Delete clip?", body: "This deletes the clip and its file.", confirmLabel: "Delete" }))) return;
     try {
       await api(`clips/${id}`, { method: "DELETE" });
       await clips.refresh();

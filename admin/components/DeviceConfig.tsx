@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useConfirm } from "@/components/confirm";
 import { api } from "@/lib/api";
 import { Spinner } from "@/components/ui";
 import { ConfigField } from "@/components/ConfigField";
@@ -46,6 +47,7 @@ export function DeviceConfig({ serial, unit }: { serial: string; unit: string })
   const [sleeping, setSleeping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const category = CATEGORIES.find((c) => c.key === cat)!;
 
@@ -101,7 +103,15 @@ export function DeviceConfig({ serial, unit }: { serial: string; unit: string })
   async function save(seg: string) {
     if (!segDirty(seg)) return;
     const meta = segmentMeta(seg);
-    if (meta.danger && !confirm(`${meta.label}: ${meta.note || "This can disrupt the unit."}\n\nApply changes?`)) return;
+    if (
+      meta.danger &&
+      !(await confirm({
+        title: meta.label,
+        body: `${meta.note || "This can disrupt the unit."} Apply changes?`,
+        confirmLabel: "Apply",
+      }))
+    )
+      return;
     setSaving(seg);
     setError(null);
     setNotice(null);

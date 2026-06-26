@@ -2,6 +2,7 @@
 
 import { Fragment, useState } from "react";
 import { api } from "@/lib/api";
+import { useConfirm } from "@/components/confirm";
 import { useFetch } from "@/lib/useFetch";
 import { LivePlayer } from "@/components/LivePlayer";
 import { Badge, Empty, ErrorBanner, Spinner } from "@/components/ui";
@@ -68,6 +69,7 @@ function DeviceClips({ serial, sleeping }: { serial: string; sleeping: boolean }
   const range = defaultRange();
   // Stored clips for THIS device only (server-side filter), polled so status updates.
   const clips = useFetch<{ clips: Clip[] }>(`clips?serial=${encodeURIComponent(serial)}`, 4000);
+  const confirm = useConfirm();
 
   const [camera, setCamera] = useState(0);
   const [profile, setProfile] = useState(0);
@@ -146,7 +148,7 @@ function DeviceClips({ serial, sleeping }: { serial: string; sleeping: boolean }
   }
 
   async function remove(id: number) {
-    if (!confirm("Delete this clip and its file?")) return;
+    if (!(await confirm({ title: "Delete clip?", body: "This deletes the clip and its file.", confirmLabel: "Delete" }))) return;
     try {
       await api(`clips/${id}`, { method: "DELETE" });
       await clips.refresh();

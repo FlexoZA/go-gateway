@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useConfirm } from "@/components/confirm";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
@@ -99,6 +100,7 @@ function WebhookRow({
   const [name, setName] = useState(webhook.name);
   const [url, setUrl] = useState(webhook.url);
   const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
 
   useEffect(() => {
     setName(webhook.name);
@@ -149,8 +151,15 @@ function WebhookRow({
           <button
             className="btn-danger"
             disabled={busy}
-            onClick={() => {
-              if (confirm(`Delete webhook "${webhook.name || webhook.url}"?`)) onDelete(webhook.id);
+            onClick={async () => {
+              if (
+                await confirm({
+                  title: "Delete webhook?",
+                  body: `“${webhook.name || webhook.url}” will stop receiving telemetry.`,
+                  confirmLabel: "Delete",
+                })
+              )
+                onDelete(webhook.id);
             }}
           >
             Delete
