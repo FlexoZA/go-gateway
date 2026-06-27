@@ -337,6 +337,47 @@ GET /api/clips/{id}/download   →   a 15-second .mp4`}</CodeBlock>
         <code>0</code> comes back as channel <code>1</code>.
       </Callout>
 
+      <h3>Search stills stored on the device</h3>
+      <Endpoint method="GET" path="/api/units/{serial}/snapshots/search?camera=&start_utc=&end_utc=&kind=">
+        List stills already on the device&rsquo;s SD card for a window (file query <code>0x4060</code>).{" "}
+        <code>camera</code> 0-based (omit or <code>-1</code> = all); <code>kind</code> <code>general</code>{" "}
+        (default) or <code>alarm</code>; times are UTC seconds. For &ldquo;all cameras&rdquo; the gateway
+        queries each channel and merges — the device rejects an all-channels snapshot query.
+      </Endpoint>
+      <CodeBlock label="200 OK">{`{ "count": 1, "snapshots": [
+  { "channel": 0, "device_path": "/mnt/sd1/picture/Pic….jpg", "size": 208069,
+    "utc": 1782498351, "device_time": "2026-06-26 20:25:51", "kind": "general" } ] }`}</CodeBlock>
+      <Endpoint method="GET" path="/api/units/{serial}/snapshots/file?path=<device_path>">
+        Download one device-stored still by its path (from a search result), pulled over the
+        file-transfer path. Responds <code>image/jpeg</code>.
+      </Endpoint>
+
+      <h3>Save snapshots to the gateway</h3>
+      <p>
+        Persist a still server-side — the JPEG is stored under <code>CLIPS_ROOT/snapshots</code> with a
+        row in the <code>snapshots</code> table (needs a database). <code>source: &quot;capture&quot;</code>{" "}
+        takes a fresh still; <code>source: &quot;device&quot;</code> copies one from a search result.
+      </p>
+      <Endpoint method="POST" path="/api/units/{serial}/snapshots/save">
+        Body (capture): <code>{`{ "source": "capture", "camera": 0, "resolution": 0 }`}</code>. Body
+        (copy from device): <code>{`{ "source": "device", "device_path": "…", "camera": 0, "kind": "general", "captured_utc": 0 }`}</code>.
+      </Endpoint>
+      <CodeBlock label="200 OK">{`{ "ok": true, "id": 1, "file_size": 208069, "storage_path": "snapshots/<serial>/snap_….jpg" }`}</CodeBlock>
+      <Endpoint method="GET" path="/api/snapshots?serial=&limit=&offset=">
+        List snapshots saved on the gateway, newest first.
+      </Endpoint>
+      <Endpoint method="GET" path="/api/snapshots/{id}/download">
+        Stream a saved snapshot&rsquo;s JPEG (attachment).
+      </Endpoint>
+      <Endpoint method="DELETE" path="/api/snapshots/{id}">
+        Remove a saved snapshot&rsquo;s row and file.
+      </Endpoint>
+      <Callout tone="info">
+        In the admin panel these are all on the device&rsquo;s <strong>Snapshots</strong> tab: capture
+        &amp; save, search what&rsquo;s on the device, and a &ldquo;Saved on the gateway&rdquo; list with
+        view/download/delete.
+      </Callout>
+
       <hr />
       <p>
         Want to try these live? Open the <Link href="/api-console">API Console</Link> — the built-in

@@ -360,7 +360,8 @@ message golden parity test (`internal/core/message`).
   accounts and editable event mappings.
 - **Milestone 2 (done):** Howen video/media behind `Capabilities.HasVideo` —
   live HLS via ffmpeg, recorded-clip ingest to server-side storage (`CLIPS_ROOT`),
-  on-demand snapshots (capture `0x4020` + file-transfer `0x4090` image fetch),
+  snapshots (capture `0x4020` + file-transfer `0x4090` image fetch, search stored
+  stills via `0x4060`, and save to the gateway — file + `snapshots` table),
   footage/recordings query, live device status, and full device configuration
   (read/write all parameter segments) from the admin panel. Datahub/OBD frames
   (ec 771) are forwarded as `gps` telemetry with CAN/OBD values in `sensors`.

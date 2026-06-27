@@ -153,8 +153,15 @@ work.
   `POST /api/units/{serial}/snapshot/image?camera=&resolution=` as `image/jpeg`.
   No DB/bucket — the image is fetched and returned synchronously. End-to-end
   tested (`TestEndToEndSnapshotImage` drives both the control + media connections).
-  **Future polish:** admin "capture" button; persist/serve via the bucket for a
-  gallery; reuse the same file-transfer primitive to download event-media by path.
+- **Snapshots: search + save DONE.** `SearchSnapshots` lists stills stored on the
+  device (file query `0x4060`, `ft=3`/`4`; "all cameras" queries each channel and
+  merges — the device rejects `chl=0`). `FetchSnapshotFile` downloads one by path.
+  Save-to-gateway persists a JPEG under `CLIPS_ROOT/snapshots` + a `snapshots` DB
+  row. API: `/snapshots/search`, `/snapshots/file`, `/snapshots/save`,
+  `GET /api/snapshots`, `…/download`, `DELETE`. Admin Snapshots tab has capture,
+  capture-and-save, device search, and a saved-on-gateway list (lightbox preview).
+  **Future polish:** retention/cleanup of saved snapshots; optional external
+  bucket; reuse the file-transfer primitive to download event-media by path.
 - Surface the richer `det` numeric fields (speed `max/avg/cur`, voltage `cur`,
   temperature `cur`, alcohol `cur`) on the event payload — today only the mapped
   label is emitted; the magnitudes are dropped.

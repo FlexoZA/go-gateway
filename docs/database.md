@@ -94,6 +94,22 @@ device clock when requesting playback — see `DEVICE_TZ_OFFSET`). Served at
 `GET /api/clips`; one clip at `GET /api/clips/{id}`, downloaded via
 `/download`, removed (record + file) via `DELETE /api/clips/{id}`.
 
+### `snapshots` — saved-snapshot metadata
+Metadata for JPEG stills saved to the gateway. Like clips, **metadata only** —
+the bytes live on disk under `CLIPS_ROOT/snapshots`; `storage_path` is relative
+to `CLIPS_ROOT`. `source` is `capture` (taken on demand, `0x4020`) or `device`
+(copied off the SD card via file-transfer `0x4060`/`0x4090`).
+
+```
+id PK, serial, camera, kind, source, captured_utc, device_path,
+storage_path, file_size, created_at
+INDEX (serial, created_at DESC)
+```
+
+Saved via `POST /api/units/{serial}/snapshots/save`; listed at
+`GET /api/snapshots`, downloaded via `GET /api/snapshots/{id}/download`, removed
+(record + file) via `DELETE /api/snapshots/{id}`.
+
 ### `server_settings` — editable gateway settings
 Generic key/value store for runtime-editable, gateway-wide settings, with a
 `NOTIFY server_settings_changed` trigger. Keys: `gateway_name` (the identifier in

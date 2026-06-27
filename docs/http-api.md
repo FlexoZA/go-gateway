@@ -272,6 +272,58 @@ triggers the capture, then pulls the file over the device's media port
 Needs video/media enabled (`MEDIA_ADVERTISE_HOST`); a unit in standby returns
 `409 device_sleeping`, and a capture/transfer failure returns `502`.
 
+### `GET /api/units/{serial}/snapshots/search?camera=&start_utc=&end_utc=&kind=`
+List stills already stored on the device's SD card for a window (file query
+`0x4060`). `camera` is 0-based (omit or `-1` = all cameras); `kind` is `general`
+(default, file type 3) or `alarm` (file type 4); `start_utc`/`end_utc` are UTC
+Unix seconds (localized to the device clock internally). For "all cameras" the
+gateway queries each channel and merges — the device rejects an all-channels
+snapshot query.
+
+```json
+200 { "count": 1, "snapshots": [
+  { "channel": 0, "device_path": "/mnt/sd1/picture/Pic….jpg", "size": 208069,
+    "utc": 1782498351, "device_time": "2026-06-26 20:25:51", "kind": "general" } ] }
+```
+
+### `GET /api/units/{serial}/snapshots/file?path=<device_path>`
+Download one device-stored still by its path (from a search result), pulled over
+the file-transfer path (`0x4090`). Responds `200 image/jpeg`. `400` if `path` is
+missing; `409 device_sleeping` in standby.
+
+### `POST /api/units/{serial}/snapshots/save`
+Capture (or copy a device-stored) snapshot and **persist it to the gateway** —
+the JPEG is written under `CLIPS_ROOT/snapshots` and a row is added to the
+`snapshots` table. Requires a database and storage configured.
+
+```json
+// source "capture": take a fresh still and store it
+{ "source": "capture", "camera": 0, "resolution": 0 }
+// source "device": copy a stored still (from a search result) to the gateway
+{ "source": "device", "device_path": "/mnt/sd1/picture/Pic….jpg",
+  "camera": 0, "kind": "general", "captured_utc": 1782498351 }
+// 200
+{ "ok": true, "id": 1, "file_size": 208069, "storage_path": "snapshots/<serial>/snap_….jpg" }
+```
+
+### `GET /api/snapshots?serial=&limit=&offset=`
+List snapshots saved on the gateway (optionally filtered by `serial`), newest first.
+
+```json
+200 { "snapshots": [
+  { "id": 1, "serial": "87845313", "camera": 0, "kind": "general",
+    "source": "capture", "captured_utc": 1782545855, "device_path": "",
+    "file_size": 493420, "storage_path": "snapshots/87845313/snap_….jpg",
+    "created_at": "…" } ] }
+```
+
+### `GET /api/snapshots/{id}/download`
+Stream a saved snapshot's JPEG (`Content-Type: image/jpeg`, attachment). `404` if
+the row or file is missing.
+
+### `DELETE /api/snapshots/{id}`
+Remove a saved snapshot's row and its file. `200 { "ok": true }` / `404` if absent.
+
 ## Admin endpoints
 
 These back the [admin panel](admin-panel.md). All require the API key (the

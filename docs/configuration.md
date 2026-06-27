@@ -25,7 +25,7 @@ applied in `internal/core/config`.
 | `MEDIA_PORT` | `33001` | Device **media** TCP port (video frames), separate from the `LISTEN_PORT` control channel |
 | `MEDIA_ADVERTISE_HOST` | _(empty)_ | Host (no port) the device dials back for media, embedded in the live-preview command. **Empty disables video** — live streaming, recordings query, and clips all return `503`/`404` until set |
 | `HLS_ROOT` | `/tmp/hls` | Directory where ffmpeg writes HLS playlists/segments for live streams |
-| `CLIPS_ROOT` | `/var/lib/gateway/clips` | Directory where pulled `.mp4` clip files are stored (the server-side "bucket"). Back this with a persistent volume |
+| `CLIPS_ROOT` | `/var/lib/gateway/clips` | Directory where pulled `.mp4` clip files **and** saved snapshot JPEGs (under `snapshots/`) are stored (the server-side "bucket"). Back this with a persistent volume |
 | `FFMPEG_PATH` | `ffmpeg` | Path to the ffmpeg binary used to mux HLS and clips |
 | `DEBUG` | _(empty)_ | `1`/`true`/`*` for all debug logs, or a namespace like `tcp/howen`, `http` |
 
