@@ -97,6 +97,16 @@ func (f *fakeData) GetClip(context.Context, int64) (map[string]any, error) {
 	return nil, errors.New(notFoundMsg)
 }
 func (f *fakeData) DeleteClip(context.Context, int64) (string, error) { return "", nil }
+func (f *fakeData) ListSnapshots(context.Context, string, int, int) ([]map[string]any, error) {
+	return []map[string]any{}, nil
+}
+func (f *fakeData) GetSnapshot(context.Context, int64) (map[string]any, error) {
+	return nil, errors.New(notFoundMsg)
+}
+func (f *fakeData) CreateSnapshot(context.Context, string, int, string, string, int64, string, string, int64) (int64, error) {
+	return 1, nil
+}
+func (f *fakeData) DeleteSnapshot(context.Context, int64) (string, error) { return "", nil }
 func (f *fakeData) CreateWebhook(_ context.Context, _, _ string, enabled bool) (int64, error) {
 	f.lastWebhookEnabled = enabled
 	return 7, nil

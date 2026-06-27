@@ -233,6 +233,22 @@ var schema = []string{
 		updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`,
 	`CREATE INDEX IF NOT EXISTS clips_serial_created_idx ON clips (serial, created_at DESC)`,
+	// Snapshots saved to the gateway: a single JPEG persisted under
+	// CLIPS_ROOT/snapshots; storage_path is relative to that root. source is
+	// 'capture' (taken on demand) or 'device' (copied off the device's SD card).
+	`CREATE TABLE IF NOT EXISTS snapshots (
+		id           BIGSERIAL PRIMARY KEY,
+		serial       TEXT NOT NULL,
+		camera       INT NOT NULL DEFAULT 0,
+		kind         TEXT NOT NULL DEFAULT 'general',
+		source       TEXT NOT NULL DEFAULT 'capture',
+		captured_utc BIGINT NOT NULL DEFAULT 0,
+		device_path  TEXT NOT NULL DEFAULT '',
+		storage_path TEXT NOT NULL,
+		file_size    BIGINT NOT NULL DEFAULT 0,
+		created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+	)`,
+	`CREATE INDEX IF NOT EXISTS snapshots_serial_created_idx ON snapshots (serial, created_at DESC)`,
 }
 
 // Store is the gateway database. It backs device authorization (the unit

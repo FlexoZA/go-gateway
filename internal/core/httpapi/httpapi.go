@@ -80,6 +80,11 @@ type DataStore interface {
 	ListClips(ctx context.Context, serial string, limit, offset int) ([]map[string]any, error)
 	GetClip(ctx context.Context, id int64) (map[string]any, error)
 	DeleteClip(ctx context.Context, id int64) (string, error)
+
+	ListSnapshots(ctx context.Context, serial string, limit, offset int) ([]map[string]any, error)
+	GetSnapshot(ctx context.Context, id int64) (map[string]any, error)
+	CreateSnapshot(ctx context.Context, serial string, camera int, kind, source string, capturedUTC int64, devicePath, storagePath string, fileSize int64) (int64, error)
+	DeleteSnapshot(ctx context.Context, id int64) (string, error)
 }
 
 // Setting keys httpapi validates specially (mirror the postgres.Setting* consts).
@@ -326,6 +331,10 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		"POST /api/units/{serial}/snapshot/image":  s.handleSnapshotImage,
 		"GET /api/units/{serial}/snapshots/search": s.handleSnapshotSearch,
 		"GET /api/units/{serial}/snapshots/file":   s.handleSnapshotFile,
+		"POST /api/units/{serial}/snapshots/save":  s.handleSnapshotSave,
+		"GET /api/snapshots":                       s.handleListSnapshots,
+		"GET /api/snapshots/{id}/download":         s.handleSnapshotDownload,
+		"DELETE /api/snapshots/{id}":               s.handleDeleteSnapshot,
 		"POST /api/units/{serial}/clips":           s.handleClipRequest,
 		"GET /api/clips":                           s.handleListClips,
 		"GET /api/clips/{id}":                      s.handleGetClip,
@@ -914,6 +923,174 @@ func (s *Server) handleSnapshotFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(img)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(img)
+}
+
+// POST /api/units/{serial}/snapshots/save — capture (or copy a device-stored)
+// snapshot and persist it to the gateway: the JPEG is written under
+// CLIPS_ROOT/snapshots and a row is recorded in the snapshots table.
+//
+// Body: { "source": "capture"|"device", "camera": 0, "resolution": 0,
+//
+//	"device_path": "...", "kind": "general", "captured_utc": 0 }
+func (s *Server) handleSnapshotSave(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return
+	}
+	snap, ok := s.hub.Snapshotter(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or snapshots unavailable"})
+		return
+	}
+	if !s.dataReady(w) {
+		return
+	}
+	if s.clipsRoot == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "snapshot storage not configured"})
+		return
+	}
+	var req struct {
+		Source      string `json:"source"`
+		Camera      int    `json:"camera"`
+		Resolution  int    `json:"resolution"`
+		DevicePath  string `json:"device_path"`
+		Kind        string `json:"kind"`
+		CapturedUTC int64  `json:"captured_utc"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	defer cancel()
+
+	var (
+		img         []byte
+		err         error
+		source      = "capture"
+		kind        = "general"
+		devicePath  string
+		capturedUTC = time.Now().Unix()
+	)
+	if req.Source == "device" {
+		if strings.TrimSpace(req.DevicePath) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "device_path required for source=device"})
+			return
+		}
+		img, err = snap.FetchSnapshotFile(ctx, req.DevicePath)
+		source, devicePath = "device", req.DevicePath
+		if req.Kind != "" {
+			kind = req.Kind
+		}
+		if req.CapturedUTC > 0 {
+			capturedUTC = req.CapturedUTC
+		}
+	} else {
+		img, err = snap.CaptureImage(ctx, req.Camera, req.Resolution)
+	}
+	if err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+
+	rel := filepath.ToSlash(filepath.Join("snapshots", serial, fmt.Sprintf("snap_%d_cam%d.jpg", time.Now().UnixNano(), req.Camera)))
+	full := filepath.Join(s.clipsRoot, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create storage dir"})
+		return
+	}
+	if err := os.WriteFile(full, img, 0o644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not write snapshot file"})
+		return
+	}
+	id, err := s.data.CreateSnapshot(ctx, serial, req.Camera, kind, source, capturedUTC, devicePath, rel, int64(len(img)))
+	if err != nil {
+		_ = os.Remove(full)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id, "file_size": len(img), "storage_path": rel})
+}
+
+// GET /api/snapshots?serial=&limit=&offset= — list saved snapshots, newest first.
+func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
+	if !s.dataReady(w) {
+		return
+	}
+	limit, offset := pageParams(r)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	snaps, err := s.data.ListSnapshots(ctx, r.URL.Query().Get("serial"), limit, offset)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"snapshots": snaps})
+}
+
+// GET /api/snapshots/{id}/download — stream a saved snapshot's JPEG.
+func (s *Server) handleSnapshotDownload(w http.ResponseWriter, r *http.Request) {
+	if !s.dataReady(w) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid snapshot id"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	snap, err := s.data.GetSnapshot(ctx, id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "snapshot not found"})
+		return
+	}
+	if s.clipsRoot == "" {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "snapshot storage not configured"})
+		return
+	}
+	rel, _ := snap["storage_path"].(string)
+	full := filepath.Join(s.clipsRoot, filepath.FromSlash(rel))
+	if relCheck, err := filepath.Rel(s.clipsRoot, full); err != nil || strings.HasPrefix(relCheck, "..") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid snapshot path"})
+		return
+	}
+	if _, err := os.Stat(full); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "snapshot file missing"})
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(full)))
+	http.ServeFile(w, r, full)
+}
+
+// DELETE /api/snapshots/{id} — remove a saved snapshot row and its file.
+func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !s.dataReady(w) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid snapshot id"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	storagePath, err := s.data.DeleteSnapshot(ctx, id)
+	if err != nil {
+		if err.Error() == notFoundMsg {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "snapshot not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if storagePath != "" && s.clipsRoot != "" {
+		_ = os.Remove(filepath.Join(s.clipsRoot, filepath.FromSlash(storagePath)))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // POST /api/units/{serial}/clips — ask the device to upload a recorded clip. The
