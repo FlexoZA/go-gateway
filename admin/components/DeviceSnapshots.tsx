@@ -333,6 +333,6 @@ function toLocalInput(d: Date) {
 }
 function defaultRange() {
   const now = new Date();
-  const dayAgo = new Date(now.getTime() - 86400_000);
-  return { start: toLocalInput(dayAgo), end: toLocalInput(now) };
+  const weekAgo = new Date(now.getTime() - 7 * 86400_000);
+  return { start: toLocalInput(weekAgo), end: toLocalInput(now) };
 }

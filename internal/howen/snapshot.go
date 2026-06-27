@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -156,15 +157,41 @@ func (s *session) SearchSnapshots(ctx context.Context, camera int, startUTC, end
 	if kind == "alarm" {
 		ft, kindLabel = "4", "alarm"
 	}
-	channel := "0" // 0 = all cameras
+	tz := s.conn.Deps.DeviceTZOffsetHours
+
+	// Unlike video recordings, the device does NOT accept chl="0" (all channels)
+	// for a snapshot file query — it returns nothing. So for "all cameras" we
+	// query each channel and merge (matching how the device's own UI lists them).
+	var channels []string
 	if camera >= 0 {
-		channel = strconv.Itoa(camera + 1)
+		channels = []string{strconv.Itoa(camera + 1)}
+	} else {
+		channels = []string{"1", "2", "3", "4"} // cover common 1–4 channel units
 	}
-	files, err := s.queryFiles(ctx, channel, 1, startUTC, endUTC, ft)
-	if err != nil {
-		return nil, err
+
+	var out []gateway.SnapshotFileInfo
+	var lastErr error
+	for _, ch := range channels {
+		files, err := s.queryFiles(ctx, ch, 1, startUTC, endUTC, ft)
+		if err != nil {
+			lastErr = err // a non-existent channel may error; keep going
+			continue
+		}
+		out = append(out, parseSnapshotFiles(files, kindLabel, tz)...)
 	}
-	return parseSnapshotFiles(files, kindLabel, s.conn.Deps.DeviceTZOffsetHours), nil
+	// Only surface an error if nothing came back at all (e.g. single bad channel,
+	// or every channel failed).
+	if len(out) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	// Chronological, then by channel — same ordering the device UI shows.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].UTC != out[j].UTC {
+			return out[i].UTC < out[j].UTC
+		}
+		return out[i].Channel < out[j].Channel
+	})
+	return out, nil
 }
 
 // FetchSnapshotFile downloads a stored still by its device path over the

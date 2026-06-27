@@ -115,32 +115,43 @@ func TestEndToEndSnapshotSearch(t *testing.T) {
 	go func() {
 		cctx, c := context.WithTimeout(context.Background(), 5*time.Second)
 		defer c()
+		// camera=-1 (all) must query each channel since the device rejects chl=0.
 		files, err := snap.SearchSnapshots(cctx, -1, 1750000000, 1750100000, "general")
 		resCh <- result{files, err}
 	}()
 
-	fq := r.read(t)
-	if fq.Type != msgFileQuery {
-		t.Fatalf("expected 0x4060, got 0x%x", fq.Type)
+	// One file query per channel (1..4); ch1 and ch2 return a file, others empty.
+	for i := 0; i < 4; i++ {
+		fq := r.read(t)
+		if fq.Type != msgFileQuery {
+			t.Fatalf("expected 0x4060, got 0x%x", fq.Type)
+		}
+		obj, _ := parseHowenJSONObject(fq.Payload)
+		if toString(obj["ft"]) != "3" {
+			t.Fatalf("ft = %q, want 3 (general snapshot)", toString(obj["ft"]))
+		}
+		ss := toString(obj["ss"])
+		chl := toString(obj["chl"])
+		if chl == "1" || chl == "2" {
+			conn.Write(buildHowenJSONFrame(msgFileQueryResponse, map[string]any{
+				"ss": ss, "err": "8",
+				"fi": map[string]any{"chl": chl, "fn": "/mnt/sd1/picture/ch" + chl + ".jpg", "fs": "102400", "st": "2026-06-26 10:0" + chl + ":00"},
+			}))
+		}
+		conn.Write(buildHowenJSONFrame(msgFileQueryResponse, map[string]any{"ss": ss, "err": "9"}))
 	}
-	obj, _ := parseHowenJSONObject(fq.Payload)
-	if toString(obj["ft"]) != "3" {
-		t.Fatalf("ft = %q, want 3 (general snapshot)", toString(obj["ft"]))
-	}
-	ss := toString(obj["ss"])
-	conn.Write(buildHowenJSONFrame(msgFileQueryResponse, map[string]any{
-		"ss": ss, "err": "8",
-		"fi": map[string]any{"chl": "1", "fn": "/mnt/sd1/picture/A.jpg", "fs": "102400", "st": "2026-06-26 10:00:00"},
-	}))
-	conn.Write(buildHowenJSONFrame(msgFileQueryResponse, map[string]any{"ss": ss, "err": "9"}))
 
 	select {
 	case got := <-resCh:
 		if got.err != nil {
 			t.Fatalf("search failed: %v", got.err)
 		}
-		if len(got.files) != 1 || got.files[0].DevicePath != "/mnt/sd1/picture/A.jpg" {
-			t.Fatalf("files = %+v", got.files)
+		if len(got.files) != 2 {
+			t.Fatalf("want 2 files (ch1+ch2), got %+v", got.files)
+		}
+		// Sorted by time then channel: ch1 (10:01) before ch2 (10:02).
+		if got.files[0].Channel != 0 || got.files[1].Channel != 1 {
+			t.Fatalf("channel order = %d,%d", got.files[0].Channel, got.files[1].Channel)
 		}
 		if got.files[0].Kind != "general" {
 			t.Errorf("kind = %q", got.files[0].Kind)
