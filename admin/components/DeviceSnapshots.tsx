@@ -51,6 +51,14 @@ export function DeviceSnapshots({ serial, sleeping }: { serial: string; sleeping
     setPreview(p);
   }
 
+  function closePreview() {
+    if (blobRef.current) {
+      URL.revokeObjectURL(blobRef.current);
+      blobRef.current = null;
+    }
+    setPreview(null);
+  }
+
   return (
     <div className="space-y-8">
       <section>
@@ -63,21 +71,51 @@ export function DeviceSnapshots({ serial, sleeping }: { serial: string; sleeping
         <SavedPanel serial={serial} sleeping={sleeping} onView={showPreview} />
       </section>
 
-      {preview && (
-        <section>
-          <h3 className="mb-3 text-sm font-semibold text-slate-300">Preview</h3>
-          <div className="card p-3">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-              <span>{preview.meta}</span>
-              <a className="btn-ghost" href={preview.downloadHref} download={preview.downloadName}>
-                Download
-              </a>
-            </div>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={preview.src} alt="Device snapshot" className="w-full rounded-md border border-edge" />
+      {preview && <SnapshotModal preview={preview} onClose={closePreview} />}
+    </div>
+  );
+}
+
+// SnapshotModal shows a captured/saved still in a centered lightbox — click the
+// backdrop, press Escape, or hit Close to dismiss.
+function SnapshotModal({ preview, onClose }: { preview: Preview; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-lg border border-edge bg-panel p-3 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+          <span>{preview.meta}</span>
+          <div className="flex gap-2">
+            <a className="btn-ghost" href={preview.downloadHref} download={preview.downloadName}>
+              Download
+            </a>
+            <button className="btn-ghost" onClick={onClose}>
+              Close
+            </button>
           </div>
-        </section>
-      )}
+        </div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={preview.src}
+          alt="Device snapshot"
+          className="mx-auto max-h-[80vh] w-auto rounded-md border border-edge object-contain"
+        />
+      </div>
     </div>
   );
 }
