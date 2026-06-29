@@ -166,6 +166,49 @@ func TestStandbyLifecycle(t *testing.T) {
 	waitState("online")
 }
 
+// readClientFrame reads one framed message the server sent to the client conn.
+func readClientFrame(t *testing.T, conn net.Conn) gateway.Frame {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var hdr [headerSize]byte
+	if _, err := io.ReadFull(conn, hdr[:]); err != nil {
+		t.Fatalf("read header: %v", err)
+	}
+	h, err := readHeader(hdr[:])
+	if err != nil {
+		t.Fatalf("bad header: %v", err)
+	}
+	payload := make([]byte, h.Size)
+	if _, err := io.ReadFull(conn, payload); err != nil {
+		t.Fatalf("read payload: %v", err)
+	}
+	return gateway.Frame{Type: h.Type, Payload: payload}
+}
+
+// TestWakeDevice: wake_device is advertised and sends a lightweight dAPI request
+// (request_sd_health) over the control socket to poke the unit out of standby.
+func TestWakeDevice(t *testing.T) {
+	received := make(chan map[string]any, 4)
+	deps := newDeps(t, received)
+	conn, serial := dialAndWelcome(t, deps)
+
+	res, err := deps.Hub.Send(context.Background(), serial, gateway.Command{Type: "wake_device"})
+	if err != nil {
+		t.Fatalf("wake_device: %v", err)
+	}
+	if ok, _ := res.Data["ok"].(bool); !ok {
+		t.Fatalf("wake result = %+v, want ok", res.Data)
+	}
+	f := readClientFrame(t, conn)
+	if f.Type != frameJSON {
+		t.Fatalf("poke frame type = %d, want JSON", f.Type)
+	}
+	env, ok := parseEnvelope(f.Payload)
+	if !ok || env.Type != "request_sd_health" {
+		t.Fatalf("poke = %+v, want request_sd_health", env)
+	}
+}
+
 // TestEventForward: an event message carries the mapped standard event code.
 func TestEventForward(t *testing.T) {
 	received := make(chan map[string]any, 4)

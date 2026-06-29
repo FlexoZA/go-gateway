@@ -454,7 +454,7 @@ func (s *session) request(ctx context.Context, cmdType string, payload map[strin
 
 // ---- Commander ----
 
-func (s *session) SupportedCommands() []string { return []string{"reboot_unit"} }
+func (s *session) SupportedCommands() []string { return []string{"reboot_unit", "wake_device"} }
 
 func (s *session) SendCommand(ctx context.Context, cmd gateway.Command) (gateway.CommandResult, error) {
 	if s.serial == "" || !s.approved {
@@ -467,6 +467,16 @@ func (s *session) SendCommand(ctx context.Context, cmd gateway.Command) (gateway
 		}
 		// The device reboots and won't reliably answer; report acceptance.
 		return gateway.CommandResult{Data: map[string]any{"ok": true}, ReceivedAt: time.Now().UTC()}, nil
+	case "wake_device":
+		// Cathexis has no dedicated wake command — the unit wakes from standby on
+		// ANY dAPI message over its (still-open) control socket (API §4.1
+		// wake_dapi_on, "eg request for live"). Send a lightweight request as the
+		// poke, fire-and-forget: the device is waking and we don't wait for a reply.
+		// It then emits wake_dapi_on, which flips lifecycle back to online.
+		if err := s.conn.WriteFrame(buildCommand("request_sd_health", map[string]any{})); err != nil {
+			return gateway.CommandResult{}, err
+		}
+		return gateway.CommandResult{Data: map[string]any{"ok": true, "note": "wake poke sent"}, ReceivedAt: time.Now().UTC()}, nil
 	default:
 		return gateway.CommandResult{}, gateway.ErrUnsupportedCommand
 	}
