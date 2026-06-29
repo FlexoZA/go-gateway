@@ -25,8 +25,20 @@ const registry: Record<string, DeviceConfigSchema> = {
 };
 
 // deviceConfigSchema returns the device-parameter-config schema for a unit type,
-// or null when the unit has no editable device config.
+// or null when the unit has no editable device config (or uses a bespoke editor).
 export function deviceConfigSchema(unit?: string): DeviceConfigSchema | null {
   if (!unit) return null;
   return registry[unit] ?? null;
+}
+
+// deviceConfigKind selects which Config-tab editor a unit uses: "generic" for the
+// schema-driven DeviceConfig (Howen-style, all-string segments), "cathexis" for the
+// bespoke type-aware CathexisConfig (mixed types + array segments), or null for a
+// unit with no editable device config. Kept here (not the page) so the editor
+// choice stays a registry concern; the bespoke component is imported by the page to
+// avoid a lib→component import cycle.
+export function deviceConfigKind(unit?: string): "generic" | "cathexis" | null {
+  if (!unit) return null;
+  if (unit === "cathexis") return "cathexis";
+  return registry[unit] ? "generic" : null;
 }

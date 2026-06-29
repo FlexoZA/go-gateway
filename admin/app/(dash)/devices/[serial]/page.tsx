@@ -5,9 +5,10 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
-import { deviceConfigSchema } from "@/lib/deviceConfig";
+import { deviceConfigKind } from "@/lib/deviceConfig";
 import { Badge, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 import { DeviceConfig } from "@/components/DeviceConfig";
+import { CathexisConfig } from "@/components/CathexisConfig";
 import { DeviceVideo } from "@/components/DeviceVideo";
 import { DeviceSnapshots } from "@/components/DeviceSnapshots";
 
@@ -44,7 +45,8 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
   const info = useGatewayInfo();
   const unitType = conn?.protocol || reg?.protocol;
   const unitCaps = capsForUnit(info, unitType);
-  const hasConfig = !!unitCaps?.has_config && !!deviceConfigSchema(unitType);
+  const configKind = deviceConfigKind(unitType);
+  const hasConfig = !!unitCaps?.has_config && !!configKind;
   const hasVideo = !!unitCaps?.has_video;
   const hasClips = !!unitCaps?.has_clips;
   const hasSnapshotCapture = !!unitCaps?.has_snapshots;
@@ -133,7 +135,7 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
 
       {hasConfig && tab === "config" ? (
         online ? (
-          <DeviceConfig serial={serial} unit={unitType!} />
+          configKind === "cathexis" ? <CathexisConfig serial={serial} /> : <DeviceConfig serial={serial} unit={unitType!} />
         ) : (
           <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
             The device must be connected to read or edit its configuration.
