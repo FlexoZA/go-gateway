@@ -71,6 +71,21 @@ type VideoController interface {
 	QueryRecordings(ctx context.Context, camera, profile int, startUTC, endUTC int64) ([]Recording, error)
 }
 
+// ReviewController is implemented by a session that can play back recorded footage
+// as a live HLS stream (Cathexis "stream review", API §12): the device streams its
+// recorded video from a chosen UTC to the media port, which is muxed to HLS exactly
+// like a live view. Reached via Hub.Review. Kept separate from VideoController so a
+// unit can offer live video without playback.
+//
+//   - StartReview opens a review channel and begins playback from startUTC.
+//   - ReviewControl sends a transport command: 1=PlayFrom(utc), 2=Pause, 3=Resume.
+//   - StopReview tears the review HLS down.
+type ReviewController interface {
+	StartReview(ctx context.Context, camera, profile int, startUTC int64) (StreamInfo, error)
+	ReviewControl(ctx context.Context, camera, profile, command int, utc int64) error
+	StopReview(ctx context.Context, camera, profile int) error
+}
+
 // SnapshotFile is one still image the device captured: a camera channel and the
 // device-side file path it was written to. Fetching the JPEG bytes needs the
 // file-transfer path (0x4090), a later milestone.
@@ -132,6 +147,7 @@ type Capabilities struct {
 	HasConfig    bool // session implements ConfigController
 	HasStatus    bool // session implements StatusReporter
 	HasSnapshots bool // session implements Snapshotter (on-demand capture/search)
+	HasReview    bool // session implements ReviewController (recorded playback)
 }
 
 // EffectiveCapabilities is what the running gateway actually offers right now: the
@@ -146,6 +162,7 @@ type EffectiveCapabilities struct {
 	HasClips     bool `json:"has_clips"`     // video enabled AND database present
 	HasMappings  bool `json:"has_mappings"`  // unit implements MappingProvider
 	HasSnapshots bool `json:"has_snapshots"` // on-demand snapshot capture/search (video enabled too)
+	HasReview    bool `json:"has_review"`    // recorded playback (review), video enabled too
 }
 
 // MappingProvider is implemented by a Protocol whose event output is driven by an

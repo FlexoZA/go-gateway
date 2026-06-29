@@ -144,6 +144,19 @@ func (h *Hub) Video(serial string) (VideoController, bool) {
 	return vc, ok
 }
 
+// Review returns a connected device's recorded-playback controller, if its session
+// implements ReviewController.
+func (h *Hub) Review(serial string) (ReviewController, bool) {
+	h.mu.RLock()
+	e, ok := h.entries[serial]
+	h.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	rc, ok := e.commander.(ReviewController)
+	return rc, ok
+}
+
 // Snapshotter returns a connected device's snapshot capability, if its session
 // supports on-demand still-image capture.
 func (h *Hub) Snapshotter(serial string) (Snapshotter, bool) {

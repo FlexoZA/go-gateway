@@ -48,7 +48,7 @@ func New() *Protocol { return &Protocol{} }
 func (*Protocol) Name() string { return "cathexis" }
 
 func (*Protocol) Capabilities() gateway.Capabilities {
-	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true}
+	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true, HasReview: true}
 }
 
 // DefaultDevicePort is the control port Cathexis devices dial.

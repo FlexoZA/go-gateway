@@ -247,6 +247,14 @@ func liveSessionID(serial string, camera, profile int) string {
 	return fmt.Sprintf("live_%s_%d_%d", serial, camera, profile)
 }
 
+// reviewSessionID is the media-manager session id (and the device client_id) for a
+// recorded-playback stream. Unlike live frames — keyed by camera/profile — review
+// frames are routed by the welcome's client_id, so this value is sent as client_id
+// in request_review and echoed back on the review media connection.
+func reviewSessionID(serial string, camera, profile int) string {
+	return fmt.Sprintf("review_%s_%d_%d", serial, camera, profile)
+}
+
 // toFloat coerces a JSON value (number or numeric string, incl. "4,52") to a
 // float64. Cathexis devices sometimes send numbers as strings.
 func toFloat(v any) (float64, bool) {

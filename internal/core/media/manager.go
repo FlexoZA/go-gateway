@@ -74,6 +74,18 @@ type Stream struct {
 // connects to costs nothing.
 func (m *Manager) Register(id, serial string, camera, profile int) (*Stream, error) {
 	dir := filepath.Join(m.hlsRoot, serial, strconv.Itoa(camera), strconv.Itoa(profile))
+	return m.registerHLS(id, serial, camera, profile, dir)
+}
+
+// RegisterReview is like Register but writes to a review-specific directory
+// (<root>/<serial>/review/<camera>/<profile>) so a recorded playback never
+// collides with a live view of the same camera/profile.
+func (m *Manager) RegisterReview(id, serial string, camera, profile int) (*Stream, error) {
+	dir := filepath.Join(m.hlsRoot, serial, "review", strconv.Itoa(camera), strconv.Itoa(profile))
+	return m.registerHLS(id, serial, camera, profile, dir)
+}
+
+func (m *Manager) registerHLS(id, serial string, camera, profile int, dir string) (*Stream, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("media: mkdir %s: %w", dir, err)
 	}

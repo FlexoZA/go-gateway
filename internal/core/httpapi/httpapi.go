@@ -317,7 +317,11 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		// Live video.
 		"POST /api/units/{serial}/stream/start": s.handleStreamStart,
 		"POST /api/units/{serial}/stream/stop":  s.handleStreamStop,
-		"GET /api/hls/":                         s.handleHLS,
+		// Recorded playback (review).
+		"POST /api/units/{serial}/review/start":   s.handleReviewStart,
+		"POST /api/units/{serial}/review/control": s.handleReviewControl,
+		"POST /api/units/{serial}/review/stop":    s.handleReviewStop,
+		"GET /api/hls/":                           s.handleHLS,
 		// Active live streams across all units (count / stop-all).
 		"GET /api/streams":           s.handleStreamsList,
 		"POST /api/streams/stop-all": s.handleStreamsStopAll,
@@ -654,6 +658,96 @@ func (s *Server) handleStreamStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// reviewBody is a review start/control/stop request.
+type reviewBody struct {
+	Camera   int   `json:"camera"`
+	Profile  int   `json:"profile"`
+	Command  int   `json:"command"` // control only: 1=PlayFrom(seek), 2=Pause, 3=Resume
+	UTC      int64 `json:"utc"`     // PlayFrom target (start_utc on start)
+	StartUTC int64 `json:"start_utc"`
+}
+
+// POST /api/units/{serial}/review/start — begin recorded playback from start_utc.
+func (s *Server) handleReviewStart(w http.ResponseWriter, r *http.Request) {
+	rc, ok := s.reviewController(w, r.PathValue("serial"))
+	if !ok {
+		return
+	}
+	var body reviewBody
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	info, err := rc.StartReview(ctx, body.Camera, body.Profile, body.StartUTC)
+	if err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	// Playback can take several seconds to spool from the SD card; wait for the
+	// playlist so the player doesn't hard-404, but report ready:false if it's slow.
+	ready := s.waitHLSReady(ctx, info.HLSPath)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "session_id": info.SessionID, "hls_path": info.HLSPath, "ready": ready,
+	})
+}
+
+// POST /api/units/{serial}/review/control — seek/pause/resume an active review.
+func (s *Server) handleReviewControl(w http.ResponseWriter, r *http.Request) {
+	rc, ok := s.reviewController(w, r.PathValue("serial"))
+	if !ok {
+		return
+	}
+	var body reviewBody
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := rc.ReviewControl(ctx, body.Camera, body.Profile, body.Command, body.UTC); err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// POST /api/units/{serial}/review/stop — stop recorded playback.
+func (s *Server) handleReviewStop(w http.ResponseWriter, r *http.Request) {
+	rc, ok := s.reviewController(w, r.PathValue("serial"))
+	if !ok {
+		return
+	}
+	var body reviewBody
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := rc.StopReview(ctx, body.Camera, body.Profile); err != nil {
+		s.writeStreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// reviewController resolves the review controller for a connected unit, writing the
+// appropriate error response when unavailable.
+func (s *Server) reviewController(w http.ResponseWriter, serial string) (gateway.ReviewController, bool) {
+	if s.hub == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected"})
+		return nil, false
+	}
+	rc, ok := s.hub.Review(serial)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unit not connected or playback unavailable"})
+		return nil, false
+	}
+	return rc, true
 }
 
 // GET /api/streams — list the live streams currently running across all units.

@@ -109,6 +109,7 @@ func (ms *mediaServer) handle(conn net.Conn) {
 	}
 	r := bufio.NewReaderSize(conn, 64*1024)
 	var serial string
+	var clientID string // review channels echo our client_id; routes frames to that ss
 	var clipSS string
 	var clipDone bool
 
@@ -143,9 +144,19 @@ func (ms *mediaServer) handle(conn net.Conn) {
 
 		switch h.Type {
 		case frameJSON:
-			if env, ok := parseEnvelope(payload); ok && env.Type == "welcome" {
+			env, ok := parseEnvelope(payload)
+			if !ok {
+				continue
+			}
+			switch env.Type {
+			case "welcome":
 				serial = device.NormalizeSerial(toString(env.Payload["serial"]))
-				ms.log.Info(map[string]any{"event": "media_welcome", "serial": serial, "remote": conn.RemoteAddr().String()})
+				clientID = toString(env.Payload["client_id"]) // present for review (and any client_id'd stream)
+				ms.log.Info(map[string]any{"event": "media_welcome", "serial": serial, "client_id": clientID, "remote": conn.RemoteAddr().String()})
+			case "status", "error":
+				// Review/stream errors arrive on the media channel as a status/error
+				// JSON ({category, text/message}); surface them for diagnostics.
+				ms.log.Debug(map[string]any{"event": "media_status", "serial": serial, "category": toString(env.Payload["category"]), "text": toString(env.Payload["text"]) + toString(env.Payload["message"])})
 			}
 
 		case frameVideo:
@@ -156,7 +167,18 @@ func (ms *mediaServer) handle(conn net.Conn) {
 			if !ok {
 				continue
 			}
-			ss := liveSessionID(serial, vf.Camera, vf.Profile)
+			// A review connection identifies its target by the client_id it echoed in
+			// the welcome; a plain live connection has none, so fall back to the
+			// camera/profile-derived id.
+			ss := clientID
+			if ss == "" {
+				ss = liveSessionID(serial, vf.Camera, vf.Profile)
+			}
+			if len(vf.Data) == 0 {
+				// A zero-length video frame is the review end-of-stream marker (NULL
+				// frame); nothing to write.
+				continue
+			}
 			if err := ms.manager.WriteVideo(ss, vf.Data); err != nil {
 				// no active live stream for this ss — drop the connection
 				ms.log.Debug(map[string]any{"event": "media_write_failed", "ss": ss, "error": err.Error()})

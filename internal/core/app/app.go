@@ -537,6 +537,7 @@ func (a *App) effectiveCapabilities(u *unitRuntime) gateway.EffectiveCapabilitie
 		HasClips:     u.media != nil && u.clips != nil,
 		HasMappings:  u.mp != nil,
 		HasSnapshots: caps.HasSnapshots && a.cfg.VideoEnabled(),
+		HasReview:    caps.HasReview && a.cfg.VideoEnabled(),
 	}
 }
 
