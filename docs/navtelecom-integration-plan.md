@@ -258,7 +258,14 @@ Add `HasConfig` (+ `ConfigController`) once §6 is modelled; `HasCommands` (+
 ## 10. Implementation phases (proposed)
 
 - **P0 (this doc).** Protocol research + plan. ✅
-- **P1 — connect + GPS. ✅ (implemented, pending real-device validation).**
+- **P1 — connect + GPS. ✅ DONE — validated against a real START S-2011.**
+  Live on staging: a real unit (IMEI 863151075601887) completed the handshake,
+  negotiated FLEX 1.0 (20 fields, 51-byte records), and streamed a correct
+  Gauteng fix (lat −26.0842, lon 27.9376). One real bug was found and fixed: the
+  FLEX negotiation bitfield is **MSB-first** within each byte (field 1 = bit 7 of
+  byte 0), not LSB-first — the wrong order mis-aligned record fields while still
+  matching record length and CRC. Locked down with a golden test from the real
+  capture (`codec_test.go: TestRealCaptureGolden`) + a spec-example bit-order test.
   Plugin in `internal/navtelecom/` (`codec.go` + `protocol.go`), registered in
   `cmd/gateway` on port 4000. Implemented: dual `ReadFrame` (`@`/`~`/`0x7F`),
   NTCB header parse/build with XOR checksums, the `*>S`/`*>FLEX` handshake +
