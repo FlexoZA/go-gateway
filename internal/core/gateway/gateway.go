@@ -65,7 +65,7 @@ type Recording struct {
 // video stream, list recorded files, and request recorded clips from its device.
 // The HTTP API reaches it through the Hub.
 type VideoController interface {
-	StartLive(ctx context.Context, camera, profile int) (StreamInfo, error)
+	StartLive(ctx context.Context, camera, profile int, audio bool) (StreamInfo, error)
 	StopLive(ctx context.Context, camera, profile int) error
 	RequestClip(ctx context.Context, req ClipRequest) (ClipInfo, error)
 	QueryRecordings(ctx context.Context, camera, profile int, startUTC, endUTC int64) ([]Recording, error)

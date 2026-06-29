@@ -19,7 +19,7 @@ import (
 // returns the HLS path. Cathexis sends no control-channel ack for stream start —
 // the live frames arrive on the media connection — so we return once the command
 // is sent; the player retries the playlist until ffmpeg produces it.
-func (s *session) StartLive(ctx context.Context, camera, profile int) (gateway.StreamInfo, error) {
+func (s *session) StartLive(ctx context.Context, camera, profile int, audio bool) (gateway.StreamInfo, error) {
 	if s.conn.Deps.Media == nil {
 		return gateway.StreamInfo{}, errors.New("video is not enabled on this gateway")
 	}
@@ -38,16 +38,24 @@ func (s *session) StartLive(ctx context.Context, camera, profile int) (gateway.S
 	}
 
 	ss := liveSessionID(s.serial, camera, profile)
-	if _, err := s.conn.Deps.Media.Register(ss, s.serial, camera, profile); err != nil {
+	register := s.conn.Deps.Media.Register
+	if audio {
+		register = s.conn.Deps.Media.RegisterWithAudio
+	}
+	if _, err := register(ss, s.serial, camera, profile); err != nil {
 		return gateway.StreamInfo{}, err
 	}
 
+	audioFlag := 0
+	if audio {
+		audioFlag = 1
+	}
 	body := map[string]any{
 		"camera":         camera,
 		"profile":        profile,
 		"command":        1, // start
 		"period":         0, // indefinite
-		"audio":          0, // video-only in v1
+		"audio":          audioFlag,
 		"ip":             host,
 		"port":           port,
 		"client_id":      ss,

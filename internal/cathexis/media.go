@@ -109,7 +109,11 @@ func (ms *mediaServer) handle(conn net.Conn) {
 	}
 	r := bufio.NewReaderSize(conn, 64*1024)
 	var serial string
-	var clientID string // review channels echo our client_id; routes frames to that ss
+	// currentSS is the media-manager stream this connection feeds. It comes from the
+	// welcome client_id (review) or, for a plain live connection, the first video
+	// frame's camera/profile. Audio frames carry no camera/profile, so they route to
+	// whatever currentSS the video already established on this connection.
+	var currentSS string
 	var clipSS string
 	var clipDone bool
 
@@ -151,8 +155,10 @@ func (ms *mediaServer) handle(conn net.Conn) {
 			switch env.Type {
 			case "welcome":
 				serial = device.NormalizeSerial(toString(env.Payload["serial"]))
-				clientID = toString(env.Payload["client_id"]) // present for review (and any client_id'd stream)
-				ms.log.Info(map[string]any{"event": "media_welcome", "serial": serial, "client_id": clientID, "remote": conn.RemoteAddr().String()})
+				if cid := toString(env.Payload["client_id"]); cid != "" {
+					currentSS = cid // review (and any client_id'd stream) names its target up front
+				}
+				ms.log.Info(map[string]any{"event": "media_welcome", "serial": serial, "client_id": currentSS, "remote": conn.RemoteAddr().String()})
 			case "status", "error":
 				// Review/stream errors arrive on the media channel as a status/error
 				// JSON ({category, text/message}); surface them for diagnostics.
@@ -167,21 +173,35 @@ func (ms *mediaServer) handle(conn net.Conn) {
 			if !ok {
 				continue
 			}
-			// A review connection identifies its target by the client_id it echoed in
-			// the welcome; a plain live connection has none, so fall back to the
-			// camera/profile-derived id.
-			ss := clientID
-			if ss == "" {
-				ss = liveSessionID(serial, vf.Camera, vf.Profile)
+			// A live connection has no client_id, so derive the target from the
+			// first video frame's camera/profile and keep it for the connection.
+			if currentSS == "" {
+				currentSS = liveSessionID(serial, vf.Camera, vf.Profile)
 			}
 			if len(vf.Data) == 0 {
 				// A zero-length video frame is the review end-of-stream marker (NULL
 				// frame); nothing to write.
 				continue
 			}
-			if err := ms.manager.WriteVideo(ss, vf.Data); err != nil {
+			if err := ms.manager.WriteVideo(currentSS, vf.Data); err != nil {
 				// no active live stream for this ss — drop the connection
-				ms.log.Debug(map[string]any{"event": "media_write_failed", "ss": ss, "error": err.Error()})
+				ms.log.Debug(map[string]any{"event": "media_write_failed", "ss": currentSS, "error": err.Error()})
+				return
+			}
+
+		case frameAudio:
+			// Audio carries no camera/profile; it belongs to whatever stream this
+			// connection's video established. Drop until then, and ignore if the
+			// stream has no audio track (WriteAudio is a no-op there).
+			if currentSS == "" {
+				continue
+			}
+			aac, ok := parseAudioFrame(payload)
+			if !ok || len(aac) == 0 {
+				continue
+			}
+			if err := ms.manager.WriteAudio(currentSS, aac); err != nil {
+				ms.log.Debug(map[string]any{"event": "media_audio_write_failed", "ss": currentSS, "error": err.Error()})
 				return
 			}
 
@@ -205,7 +225,7 @@ func (ms *mediaServer) handle(conn net.Conn) {
 			}
 
 		default:
-			// audio (3), event-preview (15), heartbeat (0): ignored in v1
+			// event-preview (15) is control-channel; heartbeat (0) is a no-op here.
 		}
 	}
 }

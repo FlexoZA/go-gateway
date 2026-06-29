@@ -71,6 +71,29 @@ func TestParseClipChunk(t *testing.T) {
 	}
 }
 
+func TestParseAudioFrame(t *testing.T) {
+	aac := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	// v1: 23-byte header.
+	p := make([]byte, audioHdrV1+len(aac))
+	binary.LittleEndian.PutUint32(p[0:4], magicAudioV1)
+	copy(p[audioHdrV1:], aac)
+	got, ok := parseAudioFrame(p)
+	if !ok || string(got) != string(aac) {
+		t.Fatalf("v1 parse: ok=%v got=%x", ok, got)
+	}
+	// v2: 27-byte header.
+	p2 := make([]byte, audioHdrV2+len(aac))
+	binary.LittleEndian.PutUint32(p2[0:4], magicAudioV2)
+	copy(p2[audioHdrV2:], aac)
+	if got, ok := parseAudioFrame(p2); !ok || string(got) != string(aac) {
+		t.Fatalf("v2 parse: ok=%v got=%x", ok, got)
+	}
+	// Bad magic / too short are rejected.
+	if _, ok := parseAudioFrame([]byte{1, 2, 3}); ok {
+		t.Fatal("short audio frame should fail")
+	}
+}
+
 func TestParseEventPreview(t *testing.T) {
 	road := []byte{0xFF, 0xD8, 0xAA, 0xFF, 0xD9} // pretend road JPEG
 	cab := []byte{0xFF, 0xD8, 0xBB, 0xBB, 0xFF, 0xD9}

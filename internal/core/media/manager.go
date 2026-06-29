@@ -58,11 +58,14 @@ type Stream struct {
 	codec   string // input codec for clips: "h264" or "hevc"
 	Started time.Time
 
+	audio bool // also mux an audio track (fed via WriteAudio → ffmpeg pipe:3)
+
 	mu         sync.Mutex
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
-	done       chan struct{} // closed once ffmpeg has exited (clip finalize waits on it)
-	running    bool          // ffmpeg spawned
+	audioW     io.WriteCloser // audio input pipe (write end); nil unless audio
+	done       chan struct{}  // closed once ffmpeg has exited (clip finalize waits on it)
+	running    bool           // ffmpeg spawned
 	closed     bool
 	bytes      int64
 	lastWrite  time.Time // last time a frame was written (device liveness)
@@ -74,7 +77,14 @@ type Stream struct {
 // connects to costs nothing.
 func (m *Manager) Register(id, serial string, camera, profile int) (*Stream, error) {
 	dir := filepath.Join(m.hlsRoot, serial, strconv.Itoa(camera), strconv.Itoa(profile))
-	return m.registerHLS(id, serial, camera, profile, dir)
+	return m.registerHLS(id, serial, camera, profile, dir, false)
+}
+
+// RegisterWithAudio is like Register but the HLS stream also muxes an audio track
+// fed via WriteAudio (the device sends interleaved video + AAC).
+func (m *Manager) RegisterWithAudio(id, serial string, camera, profile int) (*Stream, error) {
+	dir := filepath.Join(m.hlsRoot, serial, strconv.Itoa(camera), strconv.Itoa(profile))
+	return m.registerHLS(id, serial, camera, profile, dir, true)
 }
 
 // RegisterReview is like Register but writes to a review-specific directory
@@ -82,10 +92,10 @@ func (m *Manager) Register(id, serial string, camera, profile int) (*Stream, err
 // collides with a live view of the same camera/profile.
 func (m *Manager) RegisterReview(id, serial string, camera, profile int) (*Stream, error) {
 	dir := filepath.Join(m.hlsRoot, serial, "review", strconv.Itoa(camera), strconv.Itoa(profile))
-	return m.registerHLS(id, serial, camera, profile, dir)
+	return m.registerHLS(id, serial, camera, profile, dir, false)
 }
 
-func (m *Manager) registerHLS(id, serial string, camera, profile int, dir string) (*Stream, error) {
+func (m *Manager) registerHLS(id, serial string, camera, profile int, dir string, audio bool) (*Stream, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("media: mkdir %s: %w", dir, err)
 	}
@@ -96,10 +106,10 @@ func (m *Manager) registerHLS(id, serial string, camera, profile int, dir string
 	if old := m.streams[id]; old != nil {
 		old.stop()
 	}
-	s := &Stream{ID: id, Serial: serial, Camera: camera, Profile: profile, Dir: dir, Started: time.Now()}
+	s := &Stream{ID: id, Serial: serial, Camera: camera, Profile: profile, Dir: dir, audio: audio, Started: time.Now()}
 	m.streams[id] = s
 	m.mu.Unlock()
-	m.log.Debug(map[string]any{"event": "stream_registered", "id": id, "serial": serial, "camera": camera, "profile": profile})
+	m.log.Debug(map[string]any{"event": "stream_registered", "id": id, "serial": serial, "camera": camera, "profile": profile, "audio": audio})
 	return s, nil
 }
 
@@ -184,6 +194,17 @@ func (m *Manager) WriteVideo(id string, h264 []byte) error {
 		return fmt.Errorf("media: no stream %q", id)
 	}
 	return s.write(m, h264)
+}
+
+// WriteAudio appends an AAC frame to an audio-enabled stream's second ffmpeg
+// input. No-op (nil) for a stream registered without audio. Errors if the stream
+// is unknown/closed.
+func (m *Manager) WriteAudio(id string, aac []byte) error {
+	s, ok := m.Get(id)
+	if !ok {
+		return fmt.Errorf("media: no stream %q", id)
+	}
+	return s.writeAudio(m, aac)
 }
 
 // Stop terminates a stream's ffmpeg and removes its output.
@@ -361,6 +382,33 @@ func (m *Manager) StopAllLive() int {
 func (s *Stream) write(m *Manager, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureSpawned(m); err != nil {
+		return err
+	}
+	s.lastWrite = time.Now()
+	n, err := s.stdin.Write(data)
+	s.bytes += int64(n)
+	return err
+}
+
+// writeAudio feeds an AAC frame to the stream's audio input. Silently ignored for
+// a stream registered without audio (audioW nil).
+func (s *Stream) writeAudio(m *Manager, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureSpawned(m); err != nil {
+		return err
+	}
+	if s.audioW == nil {
+		return nil
+	}
+	s.lastWrite = time.Now()
+	_, err := s.audioW.Write(data)
+	return err
+}
+
+// ensureSpawned starts ffmpeg on first use. Caller must hold s.mu.
+func (s *Stream) ensureSpawned(m *Manager) error {
 	if s.closed {
 		return fmt.Errorf("media: stream %q closed", s.ID)
 	}
@@ -370,16 +418,14 @@ func (s *Stream) write(m *Manager, data []byte) error {
 		}
 		s.running = true
 	}
-	s.lastWrite = time.Now()
-	n, err := s.stdin.Write(data)
-	s.bytes += int64(n)
-	return err
+	return nil
 }
 
 // spawn starts ffmpeg: read Annex-B H.264 from stdin, copy the video into a
 // rolling HLS playlist (no re-encode).
 func (s *Stream) spawn(m *Manager) error {
 	var args []string
+	var audioR *os.File // audio input read end, handed to ffmpeg as pipe:3
 	if s.outFile != "" {
 		// Clip: remux the recorded elementary stream into a single .mp4 (no
 		// re-encode). +faststart moves the moov atom up so the file is seekable.
@@ -398,11 +444,7 @@ func (s *Stream) spawn(m *Manager) error {
 	} else {
 		playlist := filepath.Join(s.Dir, "stream.m3u8")
 		segments := filepath.Join(s.Dir, "seg_%03d.ts")
-		args = []string{
-			"-hide_banner", "-loglevel", "error",
-			"-fflags", "+genpts",
-			"-f", "h264", "-i", "pipe:0",
-			"-an", "-c:v", "copy",
+		hls := []string{
 			"-f", "hls",
 			"-hls_time", strconv.Itoa(m.segDur),
 			"-hls_list_size", strconv.Itoa(m.listSize),
@@ -410,16 +452,61 @@ func (s *Stream) spawn(m *Manager) error {
 			"-hls_segment_filename", segments,
 			playlist,
 		}
+		if s.audio {
+			// Two inputs: H.264 on stdin, AAC on an extra fd (pipe:3). Copy the
+			// video; (re)encode the audio to AAC so HLS framing is always valid.
+			r, w, perr := os.Pipe()
+			if perr != nil {
+				return fmt.Errorf("media: audio pipe: %w", perr)
+			}
+			audioR = r
+			s.audioW = w
+			args = append([]string{
+				"-hide_banner", "-loglevel", "error",
+				"-fflags", "+genpts",
+				"-f", "h264", "-i", "pipe:0",
+				"-f", "aac", "-i", "pipe:3",
+				"-map", "0:v:0", "-map", "1:a:0",
+				"-c:v", "copy", "-c:a", "aac",
+			}, hls...)
+		} else {
+			args = append([]string{
+				"-hide_banner", "-loglevel", "error",
+				"-fflags", "+genpts",
+				"-f", "h264", "-i", "pipe:0",
+				"-an", "-c:v", "copy",
+			}, hls...)
+		}
 	}
 	cmd := exec.Command(m.ffmpeg, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		if audioR != nil {
+			audioR.Close()
+		}
+		if s.audioW != nil {
+			s.audioW.Close()
+			s.audioW = nil
+		}
 		return fmt.Errorf("media: ffmpeg stdin: %w", err)
+	}
+	if audioR != nil {
+		cmd.ExtraFiles = []*os.File{audioR} // child sees it as fd 3 (pipe:3)
 	}
 	cmd.Stderr = &lineLogger{log: m.log, id: s.ID}
 	if err := cmd.Start(); err != nil {
 		stdin.Close()
+		if audioR != nil {
+			audioR.Close()
+		}
+		if s.audioW != nil {
+			s.audioW.Close()
+			s.audioW = nil
+		}
 		return fmt.Errorf("media: ffmpeg start (is %q installed?): %w", m.ffmpeg, err)
+	}
+	if audioR != nil {
+		audioR.Close() // the child holds its own copy now
 	}
 	s.cmd = cmd
 	s.stdin = stdin
@@ -443,6 +530,9 @@ func (s *Stream) stop() {
 	s.closed = true
 	if s.stdin != nil {
 		s.stdin.Close()
+	}
+	if s.audioW != nil {
+		s.audioW.Close()
 	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()

@@ -40,6 +40,12 @@ const (
 	videoHdrV2    = 56
 	videoFrameKey = 1 // frameType field: 1 = I-frame (keyframe)
 
+	// Audio sub-header magics + sizes (type 3, AAC elementary stream).
+	magicAudioV1 = 0xFACEBACE
+	magicAudioV2 = 0xFACEBACF
+	audioHdrV1   = 23
+	audioHdrV2   = 27
+
 	// Clip sub-header (type 5).
 	magicClip   = 0xDEAF1234
 	clipHdrSize = 36
@@ -154,6 +160,27 @@ func parseVideoFrame(payload []byte) (videoFrame, bool) {
 		Keyframe: frameType == videoFrameKey,
 		Data:     payload[start:],
 	}, true
+}
+
+// parseAudioFrame strips the audio sub-header (v1 0xFACEBACE/23B, v2
+// 0xFACEBACF/27B) and returns the AAC elementary-stream bytes.
+func parseAudioFrame(payload []byte) ([]byte, bool) {
+	if len(payload) < audioHdrV1 {
+		return nil, false
+	}
+	hdr := audioHdrV1
+	switch binary.LittleEndian.Uint32(payload[0:4]) {
+	case magicAudioV1:
+		hdr = audioHdrV1
+	case magicAudioV2:
+		hdr = audioHdrV2
+	default:
+		return nil, false
+	}
+	if len(payload) < hdr {
+		return nil, false
+	}
+	return payload[hdr:], true
 }
 
 // clipChunk is a decoded type-5 clip-upload payload: a slice of the device's MP4

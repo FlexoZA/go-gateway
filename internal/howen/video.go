@@ -34,7 +34,10 @@ func channelStream(camera, profile int) (channel, streamType int) {
 
 // StartLive tells the device to start streaming the camera/profile and returns
 // the HLS path once the device acknowledges (0x1010 err=0).
-func (s *session) StartLive(ctx context.Context, camera, profile int) (gateway.StreamInfo, error) {
+// audio is accepted for the VideoController contract but Howen live remains
+// video-only (its 0x4010 preview is requested without an audio track).
+func (s *session) StartLive(ctx context.Context, camera, profile int, audio bool) (gateway.StreamInfo, error) {
+	_ = audio
 	if s.conn.Deps.Media == nil || s.conn.Deps.MediaAdvertiseHost == "" {
 		return gateway.StreamInfo{}, errors.New("video is not enabled on this gateway")
 	}

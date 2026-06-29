@@ -575,8 +575,9 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 // streamBody is the start/stop request: which camera + quality profile.
 type streamBody struct {
-	Camera  int `json:"camera"`  // 0-based camera index
-	Profile int `json:"profile"` // 0 = main (high), 1 = sub (low)
+	Camera  int  `json:"camera"`  // 0-based camera index
+	Profile int  `json:"profile"` // 0 = main (high), 1 = sub (low)
+	Audio   bool `json:"audio"`   // include an audio track in the live stream
 }
 
 // POST /api/units/{serial}/stream/start — begin a live HLS stream.
@@ -598,7 +599,7 @@ func (s *Server) handleStreamStart(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	info, err := vc.StartLive(ctx, body.Camera, body.Profile)
+	info, err := vc.StartLive(ctx, body.Camera, body.Profile, body.Audio)
 	if err != nil {
 		s.writeStreamError(w, err)
 		return
