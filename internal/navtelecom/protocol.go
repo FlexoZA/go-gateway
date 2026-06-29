@@ -20,6 +20,7 @@ import (
 
 	"github.com/dfm/device-gateway/internal/core/device"
 	"github.com/dfm/device-gateway/internal/core/gateway"
+	"github.com/dfm/device-gateway/internal/core/mapping"
 )
 
 const (
@@ -65,6 +66,13 @@ func (*Protocol) IdleTimeout() time.Duration { return idleTimeout }
 // DefaultDevicePort is the port Navtelecom devices dial when no NAVTELECOM_PORT
 // override is set, letting this unit be hosted alongside others in one process.
 func (*Protocol) DefaultDevicePort() int { return 4000 }
+
+// MappingProvider: the raw FLEX event-id → ACM event-code table is editable from
+// the admin (map type "event_code"). These thin methods let the app runner seed
+// and apply mappings without importing this package; they delegate to the
+// package-level event-code state in events.go.
+func (*Protocol) DefaultMappingEntries() []mapping.Entry { return DefaultMappingEntries() }
+func (*Protocol) ApplyMappings(byModel mapping.ByModel)  { ApplyMappings(byModel) }
 
 func (p *Protocol) setRecordLen(r *bufio.Reader, n int) { p.recordLens.Store(r, n) }
 func (p *Protocol) delRecordLen(r *bufio.Reader)        { p.recordLens.Delete(r) }
@@ -399,16 +407,34 @@ func (s *session) decodeRecords(data []byte, count int) {
 			log.Debug(map[string]any{"event": "record_decode_error", "serial": s.serial, "error": err.Error()})
 			continue
 		}
-		if s.gate != gateApproved || !rec.HasLat || !rec.HasLon {
-			continue // P1: forward only positioned records as GPS; events come later
+		if s.gate != gateApproved {
+			continue
 		}
 		payload := buildPayload(s.serial, rec)
+
+		// A non-0xFF00 event id means this record is a real event (~A/~T); routine
+		// ~C telemetry carries 0xFF00 and forwards as plain GPS. Unmapped codes pass
+		// through as "NTC:<code>" so nothing is lost (see events.go).
+		kind := "gps"
+		var evLabel string
+		if rec.HasEventID {
+			if ev, ok := eventForCode(rec.EventID); ok {
+				payload["event"] = []any{ev}
+				kind = "event"
+				evLabel = ev
+			}
+		}
+
+		hasPosition := rec.HasLat && rec.HasLon
+		if !hasPosition && kind == "gps" {
+			continue // routine record with no fix — nothing to forward
+		}
 		log.Debug(map[string]any{
-			"event": "gps_forward", "serial": s.serial,
+			"event": "telemetry_forward", "serial": s.serial, "kind": kind,
 			"lat": payload["latitude"], "lon": payload["longitude"],
-			"speed": payload["speed"], "event_id": rec.EventID,
+			"speed": payload["speed"], "event_id": rec.EventID, "emit": evLabel,
 		})
-		s.conn.Emit(s.serial, deviceMake, deviceModel, "gps", payload)
+		s.conn.Emit(s.serial, deviceMake, deviceModel, kind, payload)
 	}
 }
 

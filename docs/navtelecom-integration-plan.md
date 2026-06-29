@@ -278,8 +278,20 @@ Add `HasConfig` (+ `ConfigController`) once §6 is modelled; `HasCommands` (+
   `decodeRecord`) — all green under `-race`.
   **Still needs:** validation against a real S-2011 capture (handshake bytes,
   CRC8 seed, endianness, lat/lon) and a golden test built from it — see §9.
-- **P2 — events.** `MappingProvider` for field-2 codes + field-4 status; seed
-  defaults from the customer's event config.
+- **P2 — events. ✅ DONE.** `gateway.MappingProvider` wired (`events.go`, map type
+  `event_code`): the raw FLEX field-2 event id maps to an ACM Standard Event Code,
+  editable from the admin Device Mapping screen and applied live. The numeric ids
+  come from Navtelecom's published "Table of telematics events codes equivalence"
+  (e.g. 4688 IGN_ON, 5897 GPS_GO, 5904 AINF_GZIN); ~20 common ones are **seeded as
+  defaults** mapped to ACM codes (ignition, movement, parking, speeding, battery
+  ext/int, geofence in/out, towing/evacuation, panic, power-on, impact). Routine
+  ids forward as plain GPS, not events: `0xFF00` (current-state ~C) and the timer
+  family (`TMR_*` 5634/5635/5636, `GPS_TIMER` 5899) — validated against the live
+  device, which periodically sends 5899. Unknown/install-specific codes (digital
+  inputs, CAN, key fobs, …) pass through as `NTC:<code>` and can be mapped per
+  fleet in the admin without a redeploy. Field-4 device-status-bit events (need
+  transition tracking) remain deferred.
+  Source: <https://downloads.navtelecom.ru/documentation/protocol/navtelecom_event_codes_en.pdf>
 - **P3 — config.** `ConfigController` (`*!READ`/`*!EDITS`) once the page/tag
   schema is available; admin config screen lights up automatically.
 - **P4 (optional) — commands.** `Commander` for outputs / reboot / modes.
