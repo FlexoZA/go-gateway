@@ -290,18 +290,8 @@ func (s *session) OnClose(ctx context.Context) {
 		current = s.conn.Deps.Hub.Unregister(s.serial, s)
 	}
 	if current {
-		// Cathexis units DROP the control connection when they enter standby (they
-		// don't hold the socket open like Howen). If this session had gone to sleep
-		// before closing, keep the registry state "sleep" so the unit shows as in
-		// standby rather than offline. A connection that drops while still "online"
-		// is a genuine offline (powered down / lost). On reconnect the welcome marks
-		// it "online" again.
-		status := "offline"
-		if s.lifecycle == "sleep" {
-			status = "sleep"
-		}
-		if err := s.conn.Deps.Auth.UpdateStatus(ctx, s.serial, status); err != nil {
-			s.conn.Deps.Log.With("tcp/cathexis").Debug(map[string]any{"event": "device_status_update_failed", "serial": s.serial, "status": status, "error": err.Error()})
+		if err := s.conn.Deps.Auth.UpdateStatus(ctx, s.serial, "offline"); err != nil {
+			s.conn.Deps.Log.With("tcp/cathexis").Debug(map[string]any{"event": "device_status_update_failed", "serial": s.serial, "status": "offline", "error": err.Error()})
 		}
 	}
 }

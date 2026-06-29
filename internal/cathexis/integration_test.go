@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
@@ -18,30 +17,6 @@ import (
 	"github.com/dfm/device-gateway/internal/core/message"
 	"github.com/dfm/device-gateway/internal/core/webhook"
 )
-
-// recordingAuth records the last lifecycle status written per serial so a test can
-// assert what OnClose persisted. Authorize is inherited from AllowAll (admits all).
-type recordingAuth struct {
-	device.AllowAll
-	mu     sync.Mutex
-	status map[string]string
-}
-
-func (r *recordingAuth) UpdateStatus(_ context.Context, serial, status string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.status == nil {
-		r.status = map[string]string{}
-	}
-	r.status[serial] = status
-	return nil
-}
-
-func (r *recordingAuth) get(serial string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.status[serial]
-}
 
 // dialAndWelcome starts a cathexis server, connects, sends a welcome, and waits
 // for the device to register in the hub. Returns the live connection + serial.
@@ -231,46 +206,6 @@ func TestWakeDevice(t *testing.T) {
 	env, ok := parseEnvelope(f.Payload)
 	if !ok || env.Type != "request_sd_health" {
 		t.Fatalf("poke = %+v, want request_sd_health", env)
-	}
-}
-
-// TestStandbyPreservedOnClose: a unit that signals standby and then drops its
-// connection (Cathexis behaviour) keeps registry status "sleep", not "offline".
-func TestStandbyPreservedOnClose(t *testing.T) {
-	received := make(chan map[string]any, 8)
-	auth := &recordingAuth{}
-	deps := newDeps(t, received)
-	deps.Auth = auth // record what gets persisted
-	conn, serial := dialAndWelcome(t, deps)
-
-	// Enter standby, then wait for the lifecycle to be applied.
-	conn.Write(buildCommand("event", map[string]any{"name": "entered_standby", "utc": 1750000100}))
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if info, ok := deps.Hub.Get(serial); ok && info.State == "sleep" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("device never entered sleep")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// The device drops the connection (how Cathexis enters standby). OnClose must
-	// keep the registry "sleep", not overwrite it with "offline".
-	conn.Close()
-	deadline = time.Now().Add(3 * time.Second)
-	for {
-		if _, ok := deps.Hub.Get(serial); !ok { // OnClose ran (left the hub)
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("device never left the hub after close")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if got := auth.get(serial); got != "sleep" {
-		t.Fatalf("registry status after standby+disconnect = %q, want sleep", got)
 	}
 }
 
