@@ -321,12 +321,23 @@ type Conn struct {
 	writeM sync.Mutex
 }
 
+// writeFrameTimeout bounds a single frame write. A device that holds its socket
+// open but stops reading (e.g. deep standby) would otherwise block the writer
+// forever once its receive buffer fills — hanging the command handler that called
+// WriteFrame. The deadline is generous (control frames are tiny and flush in
+// milliseconds), so it only ever trips on a genuinely stuck peer.
+const writeFrameTimeout = 15 * time.Second
+
 // WriteFrame writes raw bytes to the device, serialized against concurrent
-// writers (command paths may write outside the read goroutine).
+// writers (command paths may write outside the read goroutine). A write deadline
+// keeps a stuck peer from hanging the caller; on timeout the write errors and the
+// caller surfaces it (the connection is typically torn down soon after).
 func (c *Conn) WriteFrame(b []byte) error {
 	c.writeM.Lock()
 	defer c.writeM.Unlock()
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(writeFrameTimeout))
 	_, err := c.Conn.Write(b)
+	_ = c.Conn.SetWriteDeadline(time.Time{})
 	return err
 }
 
