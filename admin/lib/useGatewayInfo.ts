@@ -20,6 +20,7 @@ export type Caps = {
   has_status: boolean;
   has_clips: boolean;
   has_mappings: boolean;
+  has_snapshots: boolean;
 };
 
 // SettingField mirrors gateway.SettingField — a unit's editable settings schema.
@@ -109,5 +110,6 @@ export function useAggregateCaps(): Caps | undefined {
     has_status: some("has_status"),
     has_clips: some("has_clips"),
     has_mappings: some("has_mappings"),
+    has_snapshots: some("has_snapshots"),
   };
 }

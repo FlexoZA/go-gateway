@@ -107,6 +107,65 @@ func TestGpsForward(t *testing.T) {
 	}
 }
 
+// TestEventConnectionNotRegistered: a non-control connection (connection_type
+// "event") is approved but must NOT register in the hub, or it would clobber the
+// control connection's command channel.
+func TestEventConnectionNotRegistered(t *testing.T) {
+	received := make(chan map[string]any, 4)
+	deps := newDeps(t, received)
+	srv := gateway.New(New(), deps)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go srv.Serve(ctx, ln)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	conn.Write(buildCommand("welcome", map[string]any{
+		"serial": "MVR5452 4064668", "connection_type": "event",
+	}))
+
+	// Give the server time to process; the device must not appear in the hub.
+	time.Sleep(300 * time.Millisecond)
+	if _, ok := deps.Hub.Get("MVR5452_4064668"); ok {
+		t.Fatal("event connection should not register in the hub")
+	}
+}
+
+// TestStandbyLifecycle: a power-state event flips the hub device state between
+// online and sleep.
+func TestStandbyLifecycle(t *testing.T) {
+	received := make(chan map[string]any, 8)
+	deps := newDeps(t, received)
+	conn, serial := dialAndWelcome(t, deps)
+
+	waitState := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			if info, ok := deps.Hub.Get(serial); ok && info.State == want {
+				return
+			}
+			if time.Now().After(deadline) {
+				info, _ := deps.Hub.Get(serial)
+				t.Fatalf("state never became %q (got %q)", want, info.State)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	conn.Write(buildCommand("event", map[string]any{"name": "entered_standby", "utc": 1750000100}))
+	waitState("sleep")
+	conn.Write(buildCommand("event", map[string]any{"name": "ignition_on", "utc": 1750000200}))
+	waitState("online")
+}
+
 // TestEventForward: an event message carries the mapped standard event code.
 func TestEventForward(t *testing.T) {
 	received := make(chan map[string]any, 4)

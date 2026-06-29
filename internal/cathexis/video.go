@@ -26,6 +26,9 @@ func (s *session) StartLive(ctx context.Context, camera, profile int) (gateway.S
 	if !s.approved {
 		return gateway.StreamInfo{}, errors.New("device not approved")
 	}
+	if s.lifecycle == "sleep" {
+		return gateway.StreamInfo{}, gateway.ErrDeviceSleeping
+	}
 	if camera < 0 || profile < 0 {
 		return gateway.StreamInfo{}, errors.New("invalid camera/profile")
 	}
@@ -88,6 +91,9 @@ func (s *session) RequestClip(ctx context.Context, req gateway.ClipRequest) (gat
 	if !s.approved {
 		return gateway.ClipInfo{}, errors.New("device not approved")
 	}
+	if s.lifecycle == "sleep" {
+		return gateway.ClipInfo{}, gateway.ErrDeviceSleeping
+	}
 	if req.Camera < 0 || req.Profile < 0 {
 		return gateway.ClipInfo{}, errors.New("invalid camera/profile")
 	}
@@ -132,6 +138,9 @@ func (s *session) RequestClip(ctx context.Context, req gateway.ClipRequest) (gat
 func (s *session) QueryRecordings(ctx context.Context, camera, profile int, startUTC, endUTC int64) ([]gateway.Recording, error) {
 	if !s.approved {
 		return nil, errors.New("device not approved")
+	}
+	if s.lifecycle == "sleep" {
+		return nil, gateway.ErrDeviceSleeping
 	}
 	resp, err := s.request(ctx, "request_ring_summary", map[string]any{"camera": camera}, "ring_summary")
 	if err != nil {

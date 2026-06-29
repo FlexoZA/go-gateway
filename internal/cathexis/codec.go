@@ -1,6 +1,7 @@
 package cathexis
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -40,8 +41,15 @@ const (
 	videoFrameKey = 1 // frameType field: 1 = I-frame (keyframe)
 
 	// Clip sub-header (type 5).
-	magicClip     = 0xDEAF1234
-	clipHdrSize   = 36
+	magicClip   = 0xDEAF1234
+	clipHdrSize = 36
+
+	// Event-preview sub-header (type 15): a JPEG snapshot of the road and/or cab
+	// camera pushed when an event triggers (API §9).
+	magicEventPreview = 0xFAAFAFFA
+	eventPreviewHdr   = 84
+	maxPreviewBytes   = 8 * 1024 * 1024 // 8 MiB guardrail for road+cab JPEGs
+
 	maxFramePayld = 16 * 1024 * 1024 // 16 MiB guardrail per frame
 )
 
@@ -178,6 +186,59 @@ func parseClipChunk(payload []byte) (clipChunk, bool) {
 		EndChunk:   binary.LittleEndian.Uint32(payload[32:36]) == 1,
 		Data:       payload[clipHdrSize:],
 	}, true
+}
+
+// eventPreview is a decoded type-15 event-preview snapshot: the event name, its
+// UTC, and the road/cab JPEG bytes (either may be empty when that camera's
+// preview is disabled in the device config).
+type eventPreview struct {
+	Name string
+	UTC  int64
+	Road []byte
+	Cab  []byte
+}
+
+// parseEventPreview decodes the EventPreviewHeader (84 bytes) followed by the
+// road then cab JPEGs. Layout (API §9.2.1, all little-endian):
+//
+//	magic uint32 (0xFAAFAFFA), name char[32] (NUL-terminated), utc uint32,
+//	version uint32, road_size uint32, cab_size uint32, unused[32].
+func parseEventPreview(payload []byte) (eventPreview, bool) {
+	if len(payload) < eventPreviewHdr {
+		return eventPreview{}, false
+	}
+	if binary.LittleEndian.Uint32(payload[0:4]) != magicEventPreview {
+		return eventPreview{}, false
+	}
+	roadSize := int(binary.LittleEndian.Uint32(payload[44:48]))
+	cabSize := int(binary.LittleEndian.Uint32(payload[48:52]))
+	if roadSize < 0 || cabSize < 0 || roadSize+cabSize > maxPreviewBytes {
+		return eventPreview{}, false
+	}
+	if eventPreviewHdr+roadSize+cabSize > len(payload) {
+		return eventPreview{}, false
+	}
+	ep := eventPreview{
+		Name: cString(payload[4:36]),
+		UTC:  int64(binary.LittleEndian.Uint32(payload[36:40])),
+	}
+	off := eventPreviewHdr
+	if roadSize > 0 {
+		ep.Road = payload[off : off+roadSize]
+		off += roadSize
+	}
+	if cabSize > 0 {
+		ep.Cab = payload[off : off+cabSize]
+	}
+	return ep, true
+}
+
+// cString reads a NUL-terminated ASCII string from a fixed-width byte field.
+func cString(b []byte) string {
+	if i := bytes.IndexByte(b, 0); i >= 0 {
+		b = b[:i]
+	}
+	return string(b)
 }
 
 // liveSessionID is the media-manager session id for a live stream, derived

@@ -25,6 +25,16 @@ type cathexisEvent struct {
 	event string // default ACM standard event code
 }
 
+// The device names below are the actual event-message `name` values an MVR5 unit
+// emits (MVR5 Third-Party API §4.1 "Supported Events", cross-checked against a
+// live unit's own `eventpreviews` config list). Targets are the canonical ACM
+// Standard Event Codes (several tagged "Cathexis Only" / "Cathexis + Howen").
+//
+// Codes 1–6 were correct from the start; 7–14 (collision_warning, over_speed,
+// overspeeding, panic, idling_start, idling_end, …) used names the firmware never
+// actually sends, so before this table every real event except the harsh ones
+// fell through to "ALARM". They are kept (codes are append-only) as harmless,
+// admin-editable rows; codes 15+ are the real names the device sends.
 var defaultCathexisEvents = []cathexisEvent{
 	{1, "ignition_on", "IGNITION:ON"},
 	{2, "ignition_off", "IGNITION:OFF"},
@@ -32,6 +42,8 @@ var defaultCathexisEvents = []cathexisEvent{
 	{4, "harsh_acceleration", "HARSH:ACCELERATION"},
 	{5, "harsh_turning", "HARSH:CORNERING"},
 	{6, "harsh_impact", "COLLISION"},
+	// 7–14: legacy/aliased names the firmware does not actually emit. Kept for
+	// append-only stability; superseded by the real names below.
 	{7, "collision_warning", "COLLISION"},
 	{8, "rollover_warning", "COLLISION:TURN_OVER"},
 	{9, "over_speed", "SPEEDING"},
@@ -40,6 +52,39 @@ var defaultCathexisEvents = []cathexisEvent{
 	{12, "panic", "PANIC"},
 	{13, "idling_start", "IDLING:START"},
 	{14, "idling_end", "IDLING:END"},
+	// 15+: the real event names an MVR5 emits (API §4.1).
+	{15, "idle_starts", "IDLING:START"},
+	{16, "idle_stops", "IDLING:END"},
+	{17, "idle_periodic", "IDLING:PERIODIC"},
+	{18, "speeding", "SPEEDING"},
+	{19, "gps_lock", "GPS:LOCKED"},
+	{20, "gps_lost", "GPS:TIMEOUT"},
+	{21, "button_pressed", "PANIC"},
+	{22, "button_released", "PANIC"},
+	// AI / DMS driver-monitoring events.
+	{23, "tamper", "AI:TAMPER"},
+	{24, "fatigue", "AI:FATIGUE"},
+	{25, "distraction", "AI:DISTRACTION"},
+	{26, "seatbelt", "AI:SEATBELT"},
+	{27, "yawn", "AI:YAWN"},
+	{28, "cellphone", "AI:CELLPHONE"},
+	{29, "passenger", "AI:PASSENGER"},
+	{30, "smoking", "AI:SMOKING"},
+	{31, "followingdistance", "FOLLOWING:DISTANCE:VIOLATION"},
+	// Telephony.
+	{32, "call_started", "CALL:STARTED"},
+	{33, "call_ended", "CALL:ENDED"},
+	// Vehicle / power.
+	{34, "motion_start", "TRIP:START"},
+	{35, "power_loss", "BATTERY:DISCONNECTED"},
+	// Power-state lifecycle (also drives the device online/sleep state — see
+	// reconcileLifecycle in server.go).
+	{36, "deep_sleep", "SLEEP"},
+	{37, "entered_standby", "STANDBY"},
+	{38, "wake_dapi_on", "STANDBY:WAKE:DAPI"},
+	{39, "wake_dapi_off", "STANDBY:ENTER:DAPI"},
+	{40, "wake_imu_on", "STANDBY:WAKE:IMU"},
+	{41, "wake_imu_off", "STANDBY:ENTER:IMU"},
 }
 
 // nameToCode maps a sanitized device event name to its synthetic code.

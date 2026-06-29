@@ -24,6 +24,45 @@ func TestDefaultMappingEntries(t *testing.T) {
 	}
 }
 
+// TestRealDeviceEventNames pins the real event names an MVR5 emits (API §4.1 +
+// the live unit's eventpreviews list) to their canonical ACM codes. Before the
+// mapping overhaul these names had no entry and resolved to "ALARM".
+func TestRealDeviceEventNames(t *testing.T) {
+	cases := map[string]string{
+		"idle_starts":       "IDLING:START",
+		"idle_stops":        "IDLING:END",
+		"idle_periodic":     "IDLING:PERIODIC",
+		"speeding":          "SPEEDING",
+		"gps_lock":          "GPS:LOCKED",
+		"gps_lost":          "GPS:TIMEOUT",
+		"button_pressed":    "PANIC",
+		"fatigue":           "AI:FATIGUE",
+		"distraction":       "AI:DISTRACTION",
+		"seatbelt":          "AI:SEATBELT",
+		"yawn":              "AI:YAWN",
+		"cellphone":         "AI:CELLPHONE",
+		"passenger":         "AI:PASSENGER",
+		"tamper":            "AI:TAMPER",
+		"followingdistance": "FOLLOWING:DISTANCE:VIOLATION",
+		"call_started":      "CALL:STARTED",
+		"call_ended":        "CALL:ENDED",
+		"deep_sleep":        "SLEEP",
+		"entered_standby":   "STANDBY",
+		"wake_dapi_on":      "STANDBY:WAKE:DAPI",
+		"harsh_impact":      "COLLISION",
+	}
+	for name, want := range cases {
+		got := toStandardEventCodes(map[string]any{"name": name}, true)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("event %q mapped to %v, want [%s]", name, got, want)
+		}
+	}
+	// A genuinely unknown name still resolves to ALARM.
+	if got := toStandardEventCodes(map[string]any{"name": "no_such_event"}, true); len(got) != 1 || got[0] != "ALARM" {
+		t.Errorf("unknown event mapped to %v, want [ALARM]", got)
+	}
+}
+
 func TestApplyMappingsOverride(t *testing.T) {
 	t.Cleanup(func() { currentEventCodes.Store(nil) }) // restore defaults for other tests
 

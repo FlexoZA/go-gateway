@@ -11,6 +11,7 @@ package cathexis
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -89,7 +90,7 @@ func (*Protocol) ReadFrame(r *bufio.Reader) (gateway.Frame, error) {
 }
 
 func (*Protocol) NewSession(c *gateway.Conn) gateway.Session {
-	return &session{conn: c, pending: map[string]chan map[string]any{}}
+	return &session{conn: c, pending: map[string]chan map[string]any{}, stop: make(chan struct{})}
 }
 
 type session struct {
@@ -97,6 +98,15 @@ type session struct {
 	serial   string
 	model    string
 	approved bool
+	// connType is the welcome's connection_type ("control", "event", "video", …).
+	// Only the control connection is registered in the Hub as the command channel
+	// and owns the device's online/sleep state; a device opens several connections
+	// to the control port and registering a non-control one would clobber commands.
+	connType string
+	// lifecycle is the control connection's view of device state: "online" or
+	// "sleep" (standby). Driven by power-state events (entered_standby/deep_sleep/
+	// wake_*) and GPS activity; gates video/config requests that standby won't serve.
+	lifecycle string
 
 	// pending correlates an in-flight command to the device response type it awaits
 	// (Cathexis matches responses by message type, not a session id). Guarded by
@@ -105,10 +115,19 @@ type session struct {
 	pendingMu sync.Mutex
 	pending   map[string]chan map[string]any
 
-	// latest caches the most recent telemetry for the device-detail status view.
-	statusMu sync.Mutex
-	latest   map[string]any
-	latestAt time.Time
+	// latest caches the most recent telemetry for the device-detail status view;
+	// sdHealth/environment cache the last polled SD-card and environment reports.
+	statusMu      sync.Mutex
+	latest        map[string]any
+	latestAt      time.Time
+	sdHealth      map[string]any
+	sdHealthAt    time.Time
+	environment   map[string]any
+	environmentAt time.Time
+
+	// stop ends the background status poller when the connection closes.
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 // OnFrame dispatches a decoded frame.
@@ -122,6 +141,9 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 			return nil
 		}
 		return s.handleJSON(ctx, env)
+	case frameEventPreview:
+		s.handleEventPreview(ctx, f.Payload)
+		return nil
 	default:
 		s.conn.Deps.Log.With("tcp/cathexis").Debug(map[string]any{"event": "unhandled_frame", "type": f.Type, "serial": s.serialOrUnknown()})
 		return nil
@@ -135,6 +157,12 @@ func (s *session) handleJSON(ctx context.Context, env envelope) error {
 	if !s.approved {
 		return nil
 	}
+	// A device error (payload {category, message}) fails any in-flight request so
+	// it doesn't hang to the timeout; an unsolicited one is just persisted.
+	if env.Type == "error" {
+		s.handleDeviceError(env.Payload)
+		return nil
+	}
 	// A pending command awaiting this response type takes it first.
 	if ch := s.takePending(env.Type); ch != nil {
 		ch <- env.Payload
@@ -142,17 +170,37 @@ func (s *session) handleJSON(ctx context.Context, env envelope) error {
 	}
 	switch env.Type {
 	case "gps":
+		// GPS flows at 1Hz only while the unit is awake, so any GPS confirms online.
+		s.setLifecycle(ctx, "online")
 		p := s.buildTelemetry(env.Payload, false)
 		s.recordStatus(p)
 		s.conn.Emit(s.serial, deviceMake, s.model, "gps", p)
 	case "event":
 		p := s.buildTelemetry(env.Payload, true)
+		s.reconcileLifecycle(ctx, toString(env.Payload["name"]))
 		s.recordStatus(p)
 		s.conn.Emit(s.serial, deviceMake, s.model, "event", p)
 	default:
 		s.conn.Deps.Log.With("tcp/cathexis").Debug(map[string]any{"event": "unsolicited_message", "type": env.Type, "serial": s.serial})
 	}
 	return nil
+}
+
+// handleDeviceError routes a device "error" message: if a command is in flight it
+// fails it fast (so callers see a real error instead of a timeout); otherwise the
+// error is persisted to device_errors for the admin Logs view.
+func (s *session) handleDeviceError(payload map[string]any) {
+	msg := strings.TrimSpace(toString(payload["message"]))
+	if msg == "" {
+		msg = strings.TrimSpace(toString(payload["text"]))
+	}
+	category := toString(payload["category"])
+	if s.failPending(msg) {
+		return
+	}
+	raw, _ := json.Marshal(payload)
+	s.conn.EmitDeviceError(s.serial, category, msg, raw)
+	s.conn.Deps.Log.With("tcp/cathexis").Debug(map[string]any{"event": "device_error", "serial": s.serial, "category": category, "message": msg})
 }
 
 func (s *session) handleWelcome(ctx context.Context, payload map[string]any) error {
@@ -167,8 +215,16 @@ func (s *session) handleWelcome(ctx context.Context, payload map[string]any) err
 	if i := strings.IndexAny(s.serial, "_ "); i > 0 {
 		s.model = s.serial[:i]
 	}
+	// A device opens several connections to the control port (control, event,
+	// video, …); the welcome's connection_type tells them apart. Default to
+	// "control" when absent (older firmware / the common case).
+	s.connType = strings.ToLower(strings.TrimSpace(toString(payload["connection_type"])))
+	if s.connType == "" {
+		s.connType = "control"
+	}
 
-	// Control-channel ack (type 16) when the device asks for it.
+	// Acknowledge (type 16) when the device asks for it, so it proceeds to send
+	// subsequent packets (previews/events).
 	if b, _ := payload["requires_ack"].(bool); b {
 		_ = s.conn.WriteFrame(buildAck())
 	}
@@ -195,6 +251,17 @@ func (s *session) handleWelcome(ctx context.Context, payload map[string]any) err
 	}
 
 	s.approved = true
+
+	// Only the control connection becomes the command channel + state owner.
+	// Other connection types (event-preview, video, …) are approved so their
+	// frames are processed, but must not register in the Hub (it would overwrite
+	// the control connection's commander entry and break commands).
+	if s.connType != "control" {
+		log.Info(map[string]any{"event": "device_approved", "serial": s.serial, "model": s.model, "connection_type": s.connType})
+		return nil
+	}
+
+	s.lifecycle = "online"
 	if err := s.conn.Deps.Auth.UpdateStatus(ctx, s.serial, "online"); err != nil {
 		log.Debug(map[string]any{"event": "device_status_update_failed", "serial": s.serial, "status": "online", "error": err.Error()})
 	}
@@ -208,11 +275,13 @@ func (s *session) handleWelcome(ctx context.Context, payload map[string]any) err
 			State:       "online",
 		}, s)
 	}
-	log.Info(map[string]any{"event": "device_approved", "serial": s.serial, "model": s.model})
+	log.Info(map[string]any{"event": "device_approved", "serial": s.serial, "model": s.model, "connection_type": s.connType})
+	go s.statusPoller()
 	return nil
 }
 
 func (s *session) OnClose(ctx context.Context) {
+	s.stopOnce.Do(func() { close(s.stop) })
 	if s.serial == "" || !s.approved {
 		return
 	}
@@ -254,6 +323,112 @@ func (s *session) clearPending(respType string) {
 	s.pendingMu.Lock()
 	delete(s.pending, respType)
 	s.pendingMu.Unlock()
+}
+
+// failPending delivers a device error to every in-flight request (Cathexis sends
+// a generic "error" envelope, not one keyed to the request, so a single error
+// fails whatever is waiting). Returns whether anything was waiting.
+func (s *session) failPending(msg string) bool {
+	if msg == "" {
+		msg = "device reported an error"
+	}
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	if len(s.pending) == 0 {
+		return false
+	}
+	for k, ch := range s.pending {
+		ch <- map[string]any{"error": msg}
+		delete(s.pending, k)
+	}
+	return true
+}
+
+// ---- lifecycle (online/sleep) ----
+
+// reconcileLifecycle maps a power-state event name to the device's online/sleep
+// state. Non-lifecycle events are ignored (they don't change state).
+func (s *session) reconcileLifecycle(ctx context.Context, name string) {
+	switch sanitizeEventKey(name) {
+	case "entered_standby", "deep_sleep", "wake_dapi_off", "wake_imu_off":
+		// wake_*_off means the unit re-entered standby after a brief wake.
+		s.setLifecycle(ctx, "sleep")
+	case "wake_dapi_on", "wake_imu_on", "ignition_on", "motion_start":
+		s.setLifecycle(ctx, "online")
+	}
+}
+
+// setLifecycle flips the device's online/sleep state, deduping on the last value.
+// Only the control connection owns state (it is the registered commander).
+func (s *session) setLifecycle(ctx context.Context, desired string) {
+	if !s.approved || s.connType != "control" || s.lifecycle == desired {
+		return
+	}
+	s.lifecycle = desired
+	if s.conn.Deps.Hub != nil {
+		s.conn.Deps.Hub.SetState(s.serial, s, desired)
+	}
+	if err := s.conn.Deps.Auth.UpdateStatus(ctx, s.serial, desired); err != nil {
+		s.conn.Deps.Log.With("tcp/cathexis").Debug(map[string]any{
+			"event": "device_status_update_failed", "serial": s.serial, "status": desired, "error": err.Error(),
+		})
+	}
+}
+
+// ---- event-preview snapshots (type 15) ----
+
+// handleEventPreview decodes a pushed event-preview frame (road/cab JPEGs) and
+// saves each image to the gateway bucket. Saving runs off the read loop so a slow
+// disk/DB never stalls frame processing.
+func (s *session) handleEventPreview(ctx context.Context, payload []byte) {
+	if !s.approved {
+		return
+	}
+	log := s.conn.Deps.Log.With("tcp/cathexis")
+	ep, ok := parseEventPreview(payload)
+	if !ok {
+		log.Debug(map[string]any{"event": "event_preview_bad_frame", "serial": s.serial, "len": len(payload)})
+		return
+	}
+	saver := s.conn.Deps.SnapshotSaver
+	if saver == nil {
+		log.Debug(map[string]any{"event": "event_preview_dropped_no_storage", "serial": s.serial, "name": ep.Name})
+		return
+	}
+	serial := s.serial
+	kind := sanitizeEventKey(ep.Name)
+	if kind == "" {
+		kind = "event"
+	}
+	// Copy the JPEG bytes: the payload buffer is reused by the read loop.
+	type img struct {
+		camera int
+		data   []byte
+	}
+	var imgs []img
+	if len(ep.Road) > 0 {
+		imgs = append(imgs, img{0, append([]byte(nil), ep.Road...)})
+	}
+	if len(ep.Cab) > 0 {
+		imgs = append(imgs, img{1, append([]byte(nil), ep.Cab...)})
+	}
+	if len(imgs) == 0 {
+		return
+	}
+	utc := ep.UTC
+	go func() {
+		defer func() { _ = recover() }()
+		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		for _, im := range imgs {
+			id, err := saver.Save(sctx, serial, im.camera, kind, "event", utc, im.data)
+			if err != nil {
+				log.Error(map[string]any{"event": "event_preview_save_failed", "serial": serial, "name": kind, "camera": im.camera, "error": err.Error()})
+				continue
+			}
+			log.Info(map[string]any{"event": "event_preview_saved", "serial": serial, "name": kind, "camera": im.camera, "id": id, "bytes": len(im.data)})
+		}
+	}()
 }
 
 // request sends a command and waits for the device's reply of respType.
@@ -304,28 +479,6 @@ func (s *session) recordStatus(p map[string]any) {
 	s.latest = p
 	s.latestAt = time.Now().UTC()
 	s.statusMu.Unlock()
-}
-
-func (s *session) Status() (map[string]any, bool) {
-	s.statusMu.Lock()
-	defer s.statusMu.Unlock()
-	if s.latest == nil {
-		return nil, false
-	}
-	loc := map[string]any{}
-	for _, k := range []string{"latitude", "longitude", "speed", "altitude", "satellites", "bearing"} {
-		if v, ok := s.latest[k]; ok {
-			loc[k] = v
-		}
-	}
-	snap := map[string]any{
-		"updated_at": s.latestAt.Format(time.RFC3339),
-		"location":   loc,
-	}
-	if v, ok := s.latest["ignition"]; ok {
-		snap["vehicle"] = map[string]any{"ignition": v}
-	}
-	return map[string]any{"telemetry": snap}, true
 }
 
 // ---- telemetry payload ----

@@ -71,6 +71,50 @@ func TestParseClipChunk(t *testing.T) {
 	}
 }
 
+func TestParseEventPreview(t *testing.T) {
+	road := []byte{0xFF, 0xD8, 0xAA, 0xFF, 0xD9} // pretend road JPEG
+	cab := []byte{0xFF, 0xD8, 0xBB, 0xBB, 0xFF, 0xD9}
+	p := make([]byte, eventPreviewHdr+len(road)+len(cab))
+	binary.LittleEndian.PutUint32(p[0:4], magicEventPreview)
+	copy(p[4:36], "harsh_braking")
+	binary.LittleEndian.PutUint32(p[36:40], 1750000123) // utc
+	binary.LittleEndian.PutUint32(p[40:44], 1)          // version
+	binary.LittleEndian.PutUint32(p[44:48], uint32(len(road)))
+	binary.LittleEndian.PutUint32(p[48:52], uint32(len(cab)))
+	copy(p[eventPreviewHdr:], road)
+	copy(p[eventPreviewHdr+len(road):], cab)
+
+	ep, ok := parseEventPreview(p)
+	if !ok {
+		t.Fatal("parse failed")
+	}
+	if ep.Name != "harsh_braking" || ep.UTC != 1750000123 {
+		t.Fatalf("ep = %+v, want name=harsh_braking utc=1750000123", ep)
+	}
+	if string(ep.Road) != string(road) || string(ep.Cab) != string(cab) {
+		t.Fatalf("road/cab mismatch: road=%x cab=%x", ep.Road, ep.Cab)
+	}
+
+	// Cab-only preview (road_size 0) yields only a cab image.
+	p2 := make([]byte, eventPreviewHdr+len(cab))
+	binary.LittleEndian.PutUint32(p2[0:4], magicEventPreview)
+	copy(p2[4:36], "ignition_on")
+	binary.LittleEndian.PutUint32(p2[48:52], uint32(len(cab)))
+	copy(p2[eventPreviewHdr:], cab)
+	ep2, ok := parseEventPreview(p2)
+	if !ok || ep2.Road != nil || string(ep2.Cab) != string(cab) {
+		t.Fatalf("cab-only parse: ok=%v road=%x cab=%x", ok, ep2.Road, ep2.Cab)
+	}
+
+	// A truncated payload (claims more bytes than present) is rejected.
+	bad := make([]byte, eventPreviewHdr)
+	binary.LittleEndian.PutUint32(bad[0:4], magicEventPreview)
+	binary.LittleEndian.PutUint32(bad[44:48], 9999) // road_size beyond payload
+	if _, ok := parseEventPreview(bad); ok {
+		t.Fatal("expected truncated payload to be rejected")
+	}
+}
+
 func TestToStandardEventCodes(t *testing.T) {
 	got := toStandardEventCodes(map[string]any{"name": "harsh_braking"}, true)
 	if len(got) != 1 || got[0] != "HARSH:BRAKING" {

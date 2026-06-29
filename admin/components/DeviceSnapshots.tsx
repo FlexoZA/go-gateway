@@ -41,7 +41,11 @@ type Preview = { src: string; meta: string; downloadHref: string; downloadName: 
 // DeviceSnapshots is the "Snapshots" tab: capture a new still (preview or save),
 // search/view stills stored on the device's SD card, and manage snapshots saved
 // to the gateway (file under CLIPS_ROOT/snapshots + a DB row).
-export function DeviceSnapshots({ serial, sleeping }: { serial: string; sleeping: boolean }) {
+//
+// hasCapture gates the on-demand capture + device-search panels (Howen). A unit
+// that only pushes event-preview snapshots (Cathexis) sets hasCapture=false and
+// shows just the gateway-saved list, which fills automatically as events fire.
+export function DeviceSnapshots({ serial, sleeping, hasCapture = true }: { serial: string; sleeping: boolean; hasCapture?: boolean }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const blobRef = useRef<string | null>(null);
   const gatewaySaved = useFetch<{ snapshots: GatewaySnapshot[] }>(`snapshots?serial=${encodeURIComponent(serial)}`);
@@ -71,15 +75,24 @@ export function DeviceSnapshots({ serial, sleeping }: { serial: string; sleeping
 
   return (
     <div className="space-y-8">
-      <section>
-        <h3 className="mb-3 text-sm font-semibold text-slate-300">Capture a snapshot</h3>
-        <CapturePanel serial={serial} sleeping={sleeping} onPreview={showPreview} onSaved={gatewaySaved.refresh} />
-      </section>
+      {hasCapture ? (
+        <>
+          <section>
+            <h3 className="mb-3 text-sm font-semibold text-slate-300">Capture a snapshot</h3>
+            <CapturePanel serial={serial} sleeping={sleeping} onPreview={showPreview} onSaved={gatewaySaved.refresh} />
+          </section>
 
-      <section>
-        <h3 className="mb-3 text-sm font-semibold text-slate-300">Saved on the device</h3>
-        <DevicePanel serial={serial} sleeping={sleeping} onView={showPreview} onSaved={gatewaySaved.refresh} />
-      </section>
+          <section>
+            <h3 className="mb-3 text-sm font-semibold text-slate-300">Saved on the device</h3>
+            <DevicePanel serial={serial} sleeping={sleeping} onView={showPreview} onSaved={gatewaySaved.refresh} />
+          </section>
+        </>
+      ) : (
+        <div className="rounded-md border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200">
+          This unit pushes a snapshot automatically whenever an event triggers (for cameras enabled in the device’s
+          event-preview config). They appear below as they arrive — there is no on-demand capture.
+        </div>
+      )}
 
       <section>
         <h3 className="mb-3 text-sm font-semibold text-slate-300">Saved on the gateway</h3>
@@ -421,6 +434,7 @@ function GatewayPanel({
               <tr>
                 <th className="th">Captured</th>
                 <th className="th">Camera</th>
+                <th className="th">Event / kind</th>
                 <th className="th">Source</th>
                 <th className="th">Size</th>
                 <th className="th text-right">Actions</th>
@@ -431,6 +445,7 @@ function GatewayPanel({
                 <tr key={s.id}>
                   <td className="td font-mono">{fmtUtc(s.captured_utc)}</td>
                   <td className="td text-slate-400">Cam {s.camera + 1}</td>
+                  <td className="td text-slate-400">{s.kind || "—"}</td>
                   <td className="td text-slate-400 capitalize">{s.source}</td>
                   <td className="td text-slate-400">{fmtBytes(s.file_size)}</td>
                   <td className="td">

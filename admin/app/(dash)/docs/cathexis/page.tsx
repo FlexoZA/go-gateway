@@ -9,9 +9,9 @@ export default function CathexisDocsPage() {
       <h1 className="text-2xl font-semibold text-white">Cathexis integration guide</h1>
       <p>
         This guide is for systems that <strong>read</strong> data from Cathexis MVR (mobile DVR)
-        units through the gateway&rsquo;s HTTP API: live GPS &amp; events, device status, live video,
-        and recorded clips. It does not cover changing device configuration or sending control
-        commands.
+        units through the gateway&rsquo;s HTTP API: live GPS &amp; events, device status (incl. SD-card
+        health and environment stats), live video, recorded clips, event-preview snapshots, and
+        device parameter config.
       </p>
 
       {/* ---------------------------------------------------------------- */}
@@ -150,22 +150,32 @@ export default function CathexisDocsPage() {
 ]`}</CodeBlock>
       <Callout tone="info">
         Cathexis devices name their events as strings (e.g. <code>harsh_braking</code>); the gateway
-        maps each to a standard event code before delivery. The device-name&rarr;event-code table is
-        editable on the <Link href="/device-mapping">Device Mapping</Link> page (an unrecognized
-        device event falls back to <code>ALARM</code>), and the canonical event-name picklist is
-        available at <code>GET /api/event-codes</code>.
+        maps each to a standard event code before delivery. The full MVR5 event vocabulary is mapped
+        out of the box — ignition, GPS lock/loss, idling (start/stop/periodic), harsh
+        braking/cornering/acceleration/impact, speeding, following-distance, the AI/DMS events
+        (<code>fatigue</code>, <code>distraction</code>, <code>cellphone</code>, <code>seatbelt</code>,{" "}
+        <code>yawn</code>, <code>passenger</code>, <code>tamper</code>), telephony, and power-state
+        (standby/wake) events. The device-name&rarr;event-code table is editable on the{" "}
+        <Link href="/device-mapping">Device Mapping</Link> page (an unrecognized device event falls
+        back to <code>ALARM</code>), and the canonical event-name picklist is available at{" "}
+        <code>GET /api/event-codes</code>.
       </Callout>
 
       {/* ---------------------------------------------------------------- */}
       <h2 id="status">Device status</h2>
       <p>
         Pull a live snapshot of one device — connection info plus the latest telemetry it reported.
-        The Cathexis snapshot is GPS-centric (location, ignition); it is lighter than Howen&rsquo;s
-        module/storage breakdown.
+        Alongside location and ignition, the gateway periodically polls the unit for{" "}
+        <strong>SD-card health</strong> and <strong>environment stats</strong> (input voltage/current,
+        board/case/modem temperatures, CPU/GPU load, cell &amp; Wi-Fi signal) and caches them in the
+        snapshot. <code>state</code> is <code>online</code> or <code>sleep</code> — the unit reports
+        entering/leaving standby, and while it is asleep video/clip/config requests fail fast with{" "}
+        <code>409</code> rather than hanging.
       </p>
       <Endpoint method="GET" path="/api/units/{serial}/status">
-        Live status; <code>404</code> if not connected. <code>telemetry</code> is <code>null</code>{" "}
-        until the device has sent its first GPS/event frame.
+        Live status; <code>404</code> if not connected. Sections appear as the data arrives
+        (<code>location</code>/<code>vehicle</code> after the first GPS frame; <code>sd_card</code>/
+        <code>environment</code> after the first poll).
       </Endpoint>
       <CodeBlock label="200 OK (shape)">{`{
   "serial": "MVR5452_4064668",
@@ -176,11 +186,29 @@ export default function CathexisDocsPage() {
   },
   "telemetry": {
     "updated_at": "2026-06-20T16:15:02Z",
-    "location": { "latitude": -26.2041, "longitude": 28.0473, "speed": 65.2,
-                  "altitude": 1680, "satellites": 12, "bearing": 243 },
-    "vehicle":  { "ignition": true }
+    "location": { "latitude": -26.2041, "longitude": 28.0473, "speed_kmh": 65.2,
+                  "altitude_m": 1680, "satellites": 12, "bearing": 243, "positioned": true },
+    "vehicle":  { "ignition": true, "standby": false },
+    "sd_card":  { "present": true, "type": "WesternDigital", "use_percent": 1 },
+    "environment": { "input_voltage_v": 11.99, "temp_device_c": 52.7,
+                     "cpu_load_pct": 65, "cell_level": 4 }
   }
 }`}</CodeBlock>
+
+      {/* ---------------------------------------------------------------- */}
+      <h2 id="snapshots">Event-preview snapshots</h2>
+      <p>
+        When an event triggers, the unit can push a JPEG snapshot of the road and/or cab camera
+        (whichever are enabled for that event in the device&rsquo;s event-preview config). The gateway
+        saves each image to its snapshot bucket automatically — there is no on-demand capture for
+        Cathexis. Browse and download them on the device&rsquo;s <strong>Snapshots</strong> tab, or
+        via the API:
+      </p>
+      <Endpoint method="GET" path="/api/snapshots?serial={serial}">
+        List saved snapshots (newest first). Event-preview snapshots have <code>source: "event"</code>{" "}
+        and <code>kind</code> set to the event name.
+      </Endpoint>
+      <Endpoint method="GET" path="/api/snapshots/{id}/download">Download one snapshot&rsquo;s JPEG.</Endpoint>
 
       {/* ---------------------------------------------------------------- */}
       <h2 id="video">Live video (HLS)</h2>

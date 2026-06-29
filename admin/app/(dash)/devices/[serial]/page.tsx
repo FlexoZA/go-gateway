@@ -47,6 +47,7 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
   const hasConfig = !!unitCaps?.has_config && !!deviceConfigSchema(unitType);
   const hasVideo = !!unitCaps?.has_video;
   const hasClips = !!unitCaps?.has_clips;
+  const hasSnapshotCapture = !!unitCaps?.has_snapshots;
   const tabs: Tab[] = [
     "status",
     ...(hasConfig ? (["config"] as const) : []),
@@ -148,7 +149,7 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
         )
       ) : hasVideo && tab === "snapshots" ? (
         online ? (
-          <DeviceSnapshots serial={serial} sleeping={sleeping} />
+          <DeviceSnapshots serial={serial} sleeping={sleeping} hasCapture={hasSnapshotCapture} />
         ) : (
           <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
             The device must be connected to capture snapshots.
@@ -262,13 +263,34 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
           </Card>
         )}
 
+        {/* SD card (Cathexis) */}
+        {tele?.sd_card && (
+          <Card title="SD card">
+            <KV k="Status" v={tele.sd_card.present ? <Badge tone="green">present</Badge> : <Badge tone="rose">no card</Badge>} />
+            {tele.sd_card.type && tele.sd_card.present && <KV k="Manufacturer" v={tele.sd_card.type} />}
+            {tele.sd_card.serial && <KV k="Card serial" v={tele.sd_card.serial} mono />}
+            {tele.sd_card.use_percent != null && <KV k="Used" v={`${tele.sd_card.use_percent}%`} />}
+            {tele.sd_card.power_cycles != null && <KV k="Power cycles" v={String(tele.sd_card.power_cycles)} />}
+          </Card>
+        )}
+
         {/* Environment */}
         {tele?.environment && Object.keys(tele.environment).length > 0 && (
           <Card title="Environment">
             {tele.environment.temp_in_vehicle_c != null && <KV k="Cabin temp" v={`${tele.environment.temp_in_vehicle_c} °C`} />}
             {tele.environment.temp_out_vehicle_c != null && <KV k="Outside temp" v={`${tele.environment.temp_out_vehicle_c} °C`} />}
-            {tele.environment.temp_device_c != null && <KV k="Device temp" v={`${tele.environment.temp_device_c} °C`} />}
+            {tele.environment.temp_device_c != null && <KV k="Device temp" v={`${num(tele.environment.temp_device_c, 1)} °C`} />}
+            {tele.environment.temp_case_c != null && <KV k="Case temp" v={`${num(tele.environment.temp_case_c, 1)} °C`} />}
+            {tele.environment.temp_modem_c != null && <KV k="Modem temp" v={`${num(tele.environment.temp_modem_c, 1)} °C`} />}
             {tele.environment.temp_motor_c != null && <KV k="Motor temp" v={`${tele.environment.temp_motor_c} °C`} />}
+            {tele.environment.input_voltage_v != null && <KV k="Input voltage" v={`${num(tele.environment.input_voltage_v, 2)} V`} />}
+            {tele.environment.input_current_a != null && <KV k="Input current" v={`${num(tele.environment.input_current_a, 2)} A`} />}
+            {tele.environment.supercap_voltage_v != null && <KV k="Supercap" v={`${num(tele.environment.supercap_voltage_v, 2)} V`} />}
+            {tele.environment.cpu_load_pct != null && <KV k="CPU load" v={`${tele.environment.cpu_load_pct}%`} />}
+            {tele.environment.gpu_load_pct != null && <KV k="GPU load" v={`${tele.environment.gpu_load_pct}%`} />}
+            {tele.environment.cell_level != null && <KV k="Cell signal" v={`${tele.environment.cell_level}/5`} />}
+            {tele.environment.wifi_ssid && <KV k="Wi-Fi SSID" v={tele.environment.wifi_ssid} />}
+            {tele.environment.wifi_level != null && <KV k="Wi-Fi signal" v={`${tele.environment.wifi_level}/5`} />}
             {tele.environment.humidity_in_vehicle != null && <KV k="Cabin humidity" v={`${tele.environment.humidity_in_vehicle}%`} />}
             {tele.environment.humidity_out_vehicle != null && <KV k="Outside humidity" v={`${tele.environment.humidity_out_vehicle}%`} />}
           </Card>

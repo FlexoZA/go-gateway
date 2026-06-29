@@ -184,6 +184,13 @@ func (a *App) newUnitRuntime(proto gateway.Protocol, baseDeps gateway.Deps) *uni
 		a.log.Info(map[string]any{"event": "video_enabled", "unit": u.name, "advertise": u.deps.MediaAdvertiseHost})
 	}
 
+	// Server-saved snapshots (e.g. Cathexis event-preview JPEGs the device pushes
+	// unsolicited). Needs a database + a storage root; independent of live video,
+	// since previews arrive on the device control port.
+	if a.store != nil && a.cfg.ClipsRoot != "" {
+		u.deps.SnapshotSaver = media.NewSnapshotSaver(a.store, a.cfg.ClipsRoot, a.log)
+	}
+
 	// Editable code→event mappings.
 	if mp, ok := proto.(gateway.MappingProvider); ok {
 		u.mp = mp
@@ -523,12 +530,13 @@ func (a *App) startHTTPAPI(ctx context.Context) {
 func (a *App) effectiveCapabilities(u *unitRuntime) gateway.EffectiveCapabilities {
 	caps := u.proto.Capabilities()
 	return gateway.EffectiveCapabilities{
-		HasVideo:    caps.HasVideo && a.cfg.VideoEnabled(),
-		HasCommands: caps.HasCommands,
-		HasConfig:   caps.HasConfig,
-		HasStatus:   caps.HasStatus,
-		HasClips:    u.media != nil && u.clips != nil,
-		HasMappings: u.mp != nil,
+		HasVideo:     caps.HasVideo && a.cfg.VideoEnabled(),
+		HasCommands:  caps.HasCommands,
+		HasConfig:    caps.HasConfig,
+		HasStatus:    caps.HasStatus,
+		HasClips:     u.media != nil && u.clips != nil,
+		HasMappings:  u.mp != nil,
+		HasSnapshots: caps.HasSnapshots && a.cfg.VideoEnabled(),
 	}
 }
 

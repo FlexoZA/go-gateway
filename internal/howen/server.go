@@ -42,7 +42,7 @@ func (*Protocol) Capabilities() gateway.Capabilities {
 	// Control commands, live video, parameter config, and status reporting are all
 	// implemented (video is active only when the gateway is configured with a media
 	// advertise host — see the runner's effective-capability computation).
-	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true}
+	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true, HasSnapshots: true}
 }
 
 // DefaultDevicePort is the port Howen devices dial when no <UNIT>_PORT override is

@@ -127,10 +127,11 @@ type ConfigController interface {
 // (declared AND enabled by config) are reported separately — see
 // EffectiveCapabilities.
 type Capabilities struct {
-	HasVideo    bool
-	HasCommands bool
-	HasConfig   bool // session implements ConfigController
-	HasStatus   bool // session implements StatusReporter
+	HasVideo     bool
+	HasCommands  bool
+	HasConfig    bool // session implements ConfigController
+	HasStatus    bool // session implements StatusReporter
+	HasSnapshots bool // session implements Snapshotter (on-demand capture/search)
 }
 
 // EffectiveCapabilities is what the running gateway actually offers right now: the
@@ -138,12 +139,13 @@ type Capabilities struct {
 // media advertise host; clips need a database). Surfaced to the admin panel via
 // GET /api/gateway/info so it can hide UI for features this build/config lacks.
 type EffectiveCapabilities struct {
-	HasVideo    bool `json:"has_video"`    // unit HasVideo AND video enabled (MEDIA_ADVERTISE_HOST set)
-	HasCommands bool `json:"has_commands"` // unit HasCommands
-	HasConfig   bool `json:"has_config"`   // unit HasConfig
-	HasStatus   bool `json:"has_status"`   // unit HasStatus
-	HasClips    bool `json:"has_clips"`    // video enabled AND database present
-	HasMappings bool `json:"has_mappings"` // unit implements MappingProvider
+	HasVideo     bool `json:"has_video"`     // unit HasVideo AND video enabled (MEDIA_ADVERTISE_HOST set)
+	HasCommands  bool `json:"has_commands"`  // unit HasCommands
+	HasConfig    bool `json:"has_config"`    // unit HasConfig
+	HasStatus    bool `json:"has_status"`    // unit HasStatus
+	HasClips     bool `json:"has_clips"`     // video enabled AND database present
+	HasMappings  bool `json:"has_mappings"`  // unit implements MappingProvider
+	HasSnapshots bool `json:"has_snapshots"` // on-demand snapshot capture/search (video enabled too)
 }
 
 // MappingProvider is implemented by a Protocol whose event output is driven by an
@@ -295,6 +297,10 @@ type Deps struct {
 	// file-transfer, e.g. snapshot JPEGs). Nil when video is disabled; a session
 	// must nil-check.
 	Snapshots *media.SnapshotFetch
+	// SnapshotSaver persists device-pushed JPEG stills (e.g. Cathexis
+	// event-preview snapshots) to the server bucket + snapshots table. Nil when
+	// there is no database; a session must nil-check.
+	SnapshotSaver *media.SnapshotSaver
 	// MediaAdvertiseHost is the host:port the device dials back for media frames
 	// (embedded in the start-stream/playback command). Empty when video is disabled.
 	MediaAdvertiseHost string

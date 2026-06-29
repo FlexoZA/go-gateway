@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/dfm/device-gateway/internal/core/gateway"
 )
 
 // config.go implements gateway.ConfigController for Cathexis: reading and writing
@@ -19,6 +21,9 @@ func (s *session) RequestConfig(ctx context.Context, modules []string) (map[stri
 	if !s.approved {
 		return nil, errors.New("device not approved")
 	}
+	if s.lifecycle == "sleep" {
+		return nil, gateway.ErrDeviceSleeping
+	}
 	resp, err := s.request(ctx, "request_config", map[string]any{}, "unit_config")
 	if err != nil {
 		return nil, err
@@ -30,6 +35,9 @@ func (s *session) RequestConfig(ctx context.Context, modules []string) (map[stri
 func (s *session) UpdateConfig(ctx context.Context, sc map[string]any) error {
 	if !s.approved {
 		return errors.New("device not approved")
+	}
+	if s.lifecycle == "sleep" {
+		return gateway.ErrDeviceSleeping
 	}
 	if len(sc) == 0 {
 		return errors.New("no config changes provided")

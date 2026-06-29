@@ -59,3 +59,17 @@ func FuzzParseClipChunk(f *testing.F) {
 		_, _ = parseClipChunk(data)
 	})
 }
+
+// FuzzParseEventPreview fuzzes the type-15 event-preview parser (reads
+// device-supplied road/cab sizes that index into the payload).
+func FuzzParseEventPreview(f *testing.F) {
+	p := make([]byte, eventPreviewHdr+4)
+	binary.LittleEndian.PutUint32(p[0:4], magicEventPreview)
+	copy(p[4:36], "harsh_braking")
+	binary.LittleEndian.PutUint32(p[44:48], 2) // road_size
+	f.Add(p)
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _ = parseEventPreview(data)
+	})
+}
