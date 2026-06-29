@@ -37,7 +37,9 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
   const online = !!conn;
   const sleeping = conn?.state === "sleep";
   const canWake = !!conn?.commands?.includes("wake_device");
-  const state = sleeping ? "standby" : online ? "online" : reg?.status || "offline";
+  // A unit can be in standby either while connected (Howen holds the socket) or
+  // disconnected (Cathexis drops it but the registry remembers it slept).
+  const state = sleeping || reg?.status === "sleep" ? "standby" : online ? "online" : reg?.status || "offline";
   type Tab = "status" | "config" | "video" | "snapshots";
   const [tab, setTab] = useState<Tab>("status");
   // The Config tab only exists when THIS device's unit type supports parameter
