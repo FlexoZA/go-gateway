@@ -305,6 +305,68 @@ export default function CathexisDocsPage() {
         first: a window with no overlapping footage produces nothing to download.
       </Callout>
 
+      {/* ---------------------------------------------------------------- */}
+      <h2 id="config">Device configuration</h2>
+      <p>
+        Read and write the unit&rsquo;s parameter config — the same settings the device&rsquo;s
+        commissioning tool exposes. In the panel this is the <strong>Config</strong> tab on a device;
+        over the API:
+      </p>
+      <Endpoint method="GET" path="/api/units/{serial}/config">
+        Returns the whole config under <code>sc</code>: <code>network</code>, <code>general</code>,{" "}
+        <code>cameras[]</code>, <code>events[]</code>, <code>eventpreviews[]</code>, and a read-only{" "}
+        <code>description</code>. (A <code>?modules=</code> filter is accepted for parity with other
+        units but Cathexis always returns everything.)
+      </Endpoint>
+      <Endpoint method="PUT" path="/api/units/{serial}/config">
+        Write changed config. Body is <code>{`{ "sc": { "<segment>": … } }`}</code>.
+      </Endpoint>
+      <p>Each segment has its own write rule:</p>
+      <ul>
+        <li>
+          <strong>network / general</strong> — send only the fields you change. A{" "}
+          <code>general</code> write must include the mandatory <code>account</code> field (the panel
+          adds it automatically).
+        </li>
+        <li>
+          <strong>cameras</strong> — send the <em>whole</em> array: both cameras and both profiles,
+          each with its <code>index</code> (a device requirement).
+        </li>
+        <li>
+          <strong>events</strong> — send only the changed event objects, each in the device&rsquo;s{" "}
+          <code>{`{ "event": [["key","value"], …] }`}</code> form.
+        </li>
+      </ul>
+      <Callout tone="warn" title="Writing config reboots the unit">
+        Applying any config change reboots the device so it takes effect on boot — it disconnects for
+        about a minute, and the write returns <code>{`{ "ok": true }`}</code> with an empty read-back
+        (the unit is already rebooting). <code>eventpreviews</code> is <strong>not</strong> writable
+        via this endpoint. A request while the unit is in standby returns <code>409</code> — wake it
+        first (see Commands).
+      </Callout>
+
+      {/* ---------------------------------------------------------------- */}
+      <h2 id="commands">Commands &amp; standby</h2>
+      <p>
+        A device reports its <code>state</code> as <code>online</code> or <code>sleep</code>{" "}
+        (standby). While asleep it won&rsquo;t service video, clips, or config — those requests fail
+        fast with <code>409</code> instead of hanging — so wake it first.
+      </p>
+      <Endpoint method="POST" path="/api/units/{serial}/commands">
+        Send a control command. Body is <code>{`{ "type": "<command>" }`}</code>. Supported:{" "}
+        <code>wake_device</code> and <code>reboot_unit</code>.
+      </Endpoint>
+      <ul>
+        <li>
+          <code>wake_device</code> — pokes the unit out of standby (sends a lightweight dAPI message;
+          the unit wakes and returns to <code>online</code>). Use it when <code>state</code> is{" "}
+          <code>sleep</code>, then retry your request.
+        </li>
+        <li>
+          <code>reboot_unit</code> — reboots the device immediately.
+        </li>
+      </ul>
+
       <hr />
       <p>
         Want to try these live? Open the <Link href="/api-console">API Console</Link> — the built-in
