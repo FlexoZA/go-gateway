@@ -27,8 +27,8 @@ export default function CathexisDocsPage() {
       <ul>
         <li>
           <strong>Device plane (TCP).</strong> Units connect to the gateway over TCP (control on
-          port <code>33010</code>, media on <code>33011</code>) and authenticate by serial in a{" "}
-          <code>welcome</code> message. You never speak this protocol.
+          port <code>32324</code>, media on <code>32325</code>/<code>32326</code>) and authenticate by
+          serial in a <code>welcome</code> message. You never speak this protocol.
         </li>
         <li>
           <strong>Integration plane (HTTP API).</strong> Your system calls the gateway&rsquo;s HTTP

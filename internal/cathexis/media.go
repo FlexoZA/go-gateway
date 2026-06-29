@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -32,21 +33,62 @@ type mediaServer struct {
 }
 
 func (ms *mediaServer) ListenAndServe(ctx context.Context) error {
+	// The old gateway split media across two ports (clip receiver + live stream);
+	// this unit handles both frame types from one handler, so it listens on the
+	// advertised media port and the next one to accept a device targeting either.
+	addrs := mediaAddrs(ms.addr)
 	lc := net.ListenConfig{}
-	ln, err := lc.Listen(ctx, "tcp", ms.addr)
-	if err != nil {
-		return err
+	var wg sync.WaitGroup
+	listeners := make([]net.Listener, 0, len(addrs))
+	for _, addr := range addrs {
+		ln, err := lc.Listen(ctx, "tcp", addr)
+		if err != nil {
+			// Roll back any listeners already opened so the unit fails cleanly.
+			for _, l := range listeners {
+				l.Close()
+			}
+			return err
+		}
+		listeners = append(listeners, ln)
+		ms.log.Info(map[string]any{"event": "media_listening", "addr": addr})
+		wg.Add(1)
+		go func(ln net.Listener) {
+			defer wg.Done()
+			ms.acceptLoop(ctx, ln)
+		}(ln)
 	}
-	ms.log.Info(map[string]any{"event": "media_listening", "addr": ms.addr})
-	go func() { <-ctx.Done(); ln.Close() }()
+	go func() {
+		<-ctx.Done()
+		for _, ln := range listeners {
+			ln.Close()
+		}
+	}()
+	wg.Wait()
+	return nil
+}
 
+// mediaAddrs returns the addresses the media server listens on: the advertised
+// media port plus the next port (the old gateway's separate live-stream port).
+func mediaAddrs(addr string) []string {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return []string{addr}
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return []string{addr}
+	}
+	return []string{addr, net.JoinHostPort(host, strconv.Itoa(port+1))}
+}
+
+func (ms *mediaServer) acceptLoop(ctx context.Context, ln net.Listener) {
 	var wg sync.WaitGroup
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				wg.Wait()
-				return nil
+				return
 			}
 			ms.log.Debug(map[string]any{"event": "media_accept_error", "error": err.Error()})
 			continue

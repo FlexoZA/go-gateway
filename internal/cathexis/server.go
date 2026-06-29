@@ -27,9 +27,14 @@ import (
 )
 
 const (
-	deviceMake          = "cathexis"
-	defaultControlPort  = 33010
-	defaultMediaPortNum = 33011
+	deviceMake = "cathexis"
+	// Port layout inherited from the old Node gateway, which a provisioned device
+	// expects: 32324 control (the device dials it), 32325 + 32326 media. The old
+	// gateway split media into a clip receiver (32325) and a live-stream server
+	// (32326); this unit serves both from one handler, so it listens on the media
+	// port AND the next port to accept a device that targets either.
+	defaultControlPort  = 32324
+	defaultMediaPortNum = 32325
 	idleTimeout         = 3 * time.Minute
 )
 

@@ -65,7 +65,7 @@ func newDeps(t *testing.T, received chan map[string]any) gateway.Deps {
 	}))
 	t.Cleanup(ts.Close)
 	return gateway.Deps{
-		Config:  config.Config{ListenPort: 33010},
+		Config:  config.Config{ListenPort: 32324},
 		Log:     logging.New("test"),
 		Builder: message.NewBuilder("test-gw", 0),
 		Sinks:   []gateway.Sink{webhook.New(ts.URL)},
