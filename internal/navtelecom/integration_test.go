@@ -55,7 +55,7 @@ func TestEndToEndHandshakeAndTelemetry(t *testing.T) {
 	defer ts.Close()
 
 	deps := gateway.Deps{
-		Config:  config.Config{ListenPort: 8060},
+		Config:  config.Config{ListenPort: 4000},
 		Log:     logging.New("test"),
 		Builder: message.NewBuilder("test-gw", 0),
 		Sinks:   []gateway.Sink{webhook.New(ts.URL)},
@@ -146,7 +146,7 @@ func TestEndToEndHandshakeAndTelemetry(t *testing.T) {
 // TestPingNoResponse confirms a 0x7F FLEX ping is accepted and not answered.
 func TestPingNoResponse(t *testing.T) {
 	deps := gateway.Deps{
-		Config:  config.Config{ListenPort: 8060},
+		Config:  config.Config{ListenPort: 4000},
 		Log:     logging.New("test"),
 		Builder: message.NewBuilder("test-gw", 0),
 		Auth:    device.AllowAll{},

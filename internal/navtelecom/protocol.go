@@ -64,7 +64,7 @@ func (*Protocol) IdleTimeout() time.Duration { return idleTimeout }
 
 // DefaultDevicePort is the port Navtelecom devices dial when no NAVTELECOM_PORT
 // override is set, letting this unit be hosted alongside others in one process.
-func (*Protocol) DefaultDevicePort() int { return 8060 }
+func (*Protocol) DefaultDevicePort() int { return 4000 }
 
 func (p *Protocol) setRecordLen(r *bufio.Reader, n int) { p.recordLens.Store(r, n) }
 func (p *Protocol) delRecordLen(r *bufio.Reader)        { p.recordLens.Delete(r) }

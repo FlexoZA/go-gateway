@@ -232,7 +232,7 @@ func (*Protocol) Capabilities() gateway.Capabilities { return gateway.Capabiliti
 Add `HasConfig` (+ `ConfigController`) once §6 is modelled; `HasCommands` (+
 `Commander`) if/when output/reboot control is wanted. No video/snapshots ever.
 
-- `DefaultDevicePort()` → pick a free port (fleetiger uses 8050; e.g. 8060).
+- `DefaultDevicePort()` → pick a free port (fleetiger uses 8050; navtelecom uses 4000).
 - `IdleTimeout()` → generous (device pings via 0x7F but data cadence varies);
   start at 6 min like fleetiger and tune.
 - Register one line in `cmd/gateway/main.go`: `navtelecom.New()`.
@@ -260,7 +260,7 @@ Add `HasConfig` (+ `ConfigController`) once §6 is modelled; `HasCommands` (+
 - **P0 (this doc).** Protocol research + plan. ✅
 - **P1 — connect + GPS. ✅ (implemented, pending real-device validation).**
   Plugin in `internal/navtelecom/` (`codec.go` + `protocol.go`), registered in
-  `cmd/gateway` on port 8060. Implemented: dual `ReadFrame` (`@`/`~`/`0x7F`),
+  `cmd/gateway` on port 4000. Implemented: dual `ReadFrame` (`@`/`~`/`0x7F`),
   NTCB header parse/build with XOR checksums, the `*>S`/`*>FLEX` handshake +
   `*<S`/`*<FLEX` replies (version capped at 1.0), CRC8 table, mask parser +
   static field-size table (fields 1–142), the mask-driven record decoder, GPS/IO
