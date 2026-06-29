@@ -367,6 +367,42 @@ export default function CathexisDocsPage() {
         </li>
       </ul>
 
+      {/* ---------------------------------------------------------------- */}
+      <h2 id="limitations">Not yet supported</h2>
+      <p>
+        For transparency, these are the things the integration <strong>cannot</strong> do today —
+        either the device firmware doesn&rsquo;t expose them, or they&rsquo;re not built yet:
+      </p>
+      <ul>
+        <li>
+          <strong>Recorded playback (&ldquo;stream review&rdquo;)</strong> — live scrubbing/replay of
+          SD-card footage from a chosen time. The MVR5 API defines it, but the firmware on the
+          current fleet (<code>mdvr_5_2_RC72</code>) silently ignores the request, so it isn&rsquo;t
+          offered. To review recorded footage today, pull a <Link href="#clips">clip</Link> for the
+          window instead.
+        </li>
+        <li>
+          <strong>Audio in live video</strong> — live HLS streams are video-only. (A pulled clip may
+          contain audio if the camera profile recorded it; only the <em>live</em> path drops audio.)
+        </li>
+        <li>
+          <strong>On-demand snapshots</strong> — there is no &ldquo;capture a still now&rdquo;
+          command, and no way to list or download stills the device stored on its SD card. The only
+          still images are the <Link href="#snapshots">event-preview snapshots</Link> the device
+          pushes automatically when an event fires.
+        </li>
+        <li>
+          <strong>Editing event-preview settings via the API</strong> — the <code>eventpreviews</code>{" "}
+          config section (which cameras push a preview per event) is read-only here; the device
+          rejects writes to it. Change it with the Cathexis commissioning tool.
+        </li>
+        <li>
+          <strong>Driver identification, IMU traces, and event-summary video</strong> — face-ID
+          snapshots, raw harsh-event accelerometer traces, and listing/pulling video for a specific
+          past event by ID are defined by the device but not yet implemented in the gateway.
+        </li>
+      </ul>
+
       <hr />
       <p>
         Want to try these live? Open the <Link href="/api-console">API Console</Link> — the built-in
