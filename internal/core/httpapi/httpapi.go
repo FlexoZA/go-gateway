@@ -128,12 +128,13 @@ func reportedCaps(sup gateway.EffectiveCapabilities, unit string, toggles map[st
 	}
 	video := on("video", sup.HasVideo)
 	return gateway.EffectiveCapabilities{
-		HasVideo:    video,
-		HasCommands: on("commands", sup.HasCommands),
-		HasConfig:   on("config", sup.HasConfig),
-		HasStatus:   on("status", sup.HasStatus),
-		HasClips:    sup.HasClips && video,
-		HasMappings: sup.HasMappings,
+		HasVideo:     video,
+		HasCommands:  on("commands", sup.HasCommands),
+		HasConfig:    on("config", sup.HasConfig),
+		HasStatus:    on("status", sup.HasStatus),
+		HasClips:     sup.HasClips && video,
+		HasMappings:  sup.HasMappings,
+		HasSnapshots: sup.HasSnapshots && video, // follows video; was dropped here, hiding Howen's capture UI
 	}
 }
 
