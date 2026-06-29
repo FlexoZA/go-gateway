@@ -1,15 +1,19 @@
 // Navtelecom event handling: the FLEX "event id" (telemetry field 2) → ACM
 // Standard Event Code mapping.
 //
-// Navtelecom assigns event codes in the device's OWN configuration (the protocol
-// does not fix them), so there is no universal built-in table. The mapping is
-// therefore editable from the admin Device Mapping screen (map type
-// "event_code") and applied to the running gateway without a redeploy. Until a
-// code is mapped, its events are still forwarded under a raw "NTC:<code>" label
-// so they are visible and the operator can discover which codes to map.
+// The numeric event ids come from Navtelecom's "Protocol NTCB. Table of
+// telematics events codes equivalence" (the standard codes a Signal/Smart device
+// emits, e.g. 4688 IGN_ON, 5897 GPS_GO, 5904 AINF_GZIN). defaultEventCodes maps
+// the common ones to ACM Standard Event Codes; the full table is large and
+// install-specific, so the mapping is also editable from the admin Device
+// Mapping screen (map type "event_code") and applied live without a redeploy.
+// Codes not in the default and not added by the admin pass through as a raw
+// "NTC:<code>" label so events are never lost and operators can discover which
+// codes to map.
 //
-// Event id 0xFF00 is the reserved "current state" id carried by routine ~C
-// (ping-with-data) telemetry and never produces an event.
+// Two id classes are routine, not events, and forward as plain GPS: id 0xFF00
+// (the "current state" id on ~C ping-with-data telemetry) and the timer family
+// (periodic black-box recording timers) in routineEventCodes.
 package navtelecom
 
 import (
@@ -23,10 +27,57 @@ import (
 // mapTypeEventCode is the editable map-type key: raw FLEX event id → ACM code.
 const mapTypeEventCode = "event_code"
 
-// defaultEventCodes is the built-in default raw-event-id → ACM-code table. It is
-// intentionally empty: Navtelecom codes are fleet/config-specific, so the table
-// is populated from the admin rather than shipped. See the package doc above.
-var defaultEventCodes = map[int]string{}
+// defaultEventCodes maps the common Navtelecom standard event ids (decimal, FLEX
+// field 2) to ACM Standard Event Codes. It is the seeded, admin-editable default;
+// the source mnemonics are in eventCodeDescriptions. Install-specific codes
+// (digital inputs, CAN, EcoDriving, key fobs, temperature sensors, …) are left to
+// pass through / be mapped per fleet from the admin.
+var defaultEventCodes = map[int]string{
+	4513: "ALARM:VIBRATION",   // SH1_Y  soft impact sensor triggered
+	4529: "ALARM:VIBRATION",   // SH2_Y  strong impact sensor triggered
+	4656: "BATTERY:LOW:EXT",   // AG_DOWN main supply below threshold
+	4657: "BATTERY:OK:EXT",    // AG_NORM main supply recovered
+	4672: "BATTERY:LOW:INT",   // AR_DOWN backup battery below threshold
+	4673: "BATTERY:OK:INT",    // AR_NORM backup battery recovered
+	4688: "IGNITION:ON",       // IGN_ON  ignition on (by power supply)
+	4689: "IGNITION:OFF",      // IGN_OFF ignition off (by power supply)
+	5376: "POWER:ON",          // START   device turning on
+	5380: "PANIC",             // EVNT_ALARM_GLOBAL  alarm
+	5894: "SPEED:LOW",         // GPS_VMIN speed below minimum
+	5895: "SPEEDING:START",    // GPS_VMAX speed above maximum
+	5897: "MOVEMENT:DETECTED", // GPS_GO   object has moved
+	5898: "PARKING:START",     // GPS_STOP object has stopped
+	5900: "TOWING:START",      // EVAC     evacuation (vehicle being towed)
+	5901: "TOWING:END",        // EVAC_END evacuation ended
+	5904: "ZONE:ENTER",        // AINF_GZIN  entered geofence
+	5905: "ZONE:EXIT",         // AINF_GZOUT left geofence
+	5906: "SPEEDING:START",    // SM_MAX   driving mode: speeding
+	5907: "SPEEDING:END",      // SM_NORM  driving mode: speed normal
+}
+
+// eventCodeDescriptions carries the Navtelecom source mnemonic for each default
+// code, surfaced as the seeded row's Description so the admin shows what each
+// raw id means.
+var eventCodeDescriptions = map[int]string{
+	4513: "SH1_Y soft impact", 4529: "SH2_Y strong impact",
+	4656: "AG_DOWN main supply low", 4657: "AG_NORM main supply ok",
+	4672: "AR_DOWN backup battery low", 4673: "AR_NORM backup battery ok",
+	4688: "IGN_ON", 4689: "IGN_OFF", 5376: "START device power-on",
+	5380: "EVNT_ALARM_GLOBAL", 5894: "GPS_VMIN", 5895: "GPS_VMAX",
+	5897: "GPS_GO moved", 5898: "GPS_STOP stopped", 5900: "EVAC towed",
+	5901: "EVAC_END", 5904: "AINF_GZIN geofence in", 5905: "AINF_GZOUT geofence out",
+	5906: "SM_MAX speeding", 5907: "SM_NORM speed normal",
+}
+
+// routineEventCodes are periodic/black-box recording timer ids that carry routine
+// telemetry, not a real event: they forward as plain GPS (like the 0xFF00
+// current-state id). An admin mapping for one of these still takes precedence.
+var routineEventCodes = map[uint16]bool{
+	5634: true, // TMR_B_G_0 telemetry record timer (normal mode)
+	5635: true, // TMR_B_G_1 telemetry record timer (protection mode)
+	5636: true, // TMR_GPRS  send-to-server timer
+	5899: true, // GPS_TIMER telemetry recording timer from last current event
+}
 
 // currentEventCodes is the active map, swapped atomically by ApplyMappings.
 var currentEventCodes atomic.Pointer[map[int]string]
@@ -50,7 +101,7 @@ func cloneIntStr(m map[int]string) *map[int]string {
 
 // DefaultMappingEntries flattens the built-in default map for seeding the
 // database, in stable code order. Implements part of gateway.MappingProvider.
-// (Empty by default — Navtelecom codes are added from the admin.)
+// The admin can edit or extend these rows (and add install-specific codes).
 func DefaultMappingEntries() []mapping.Entry {
 	codes := make([]int, 0, len(defaultEventCodes))
 	for c := range defaultEventCodes {
@@ -59,7 +110,12 @@ func DefaultMappingEntries() []mapping.Entry {
 	sort.Ints(codes)
 	entries := make([]mapping.Entry, 0, len(codes))
 	for _, c := range codes {
-		entries = append(entries, mapping.Entry{MapType: mapTypeEventCode, Code: c, EventCode: defaultEventCodes[c]})
+		entries = append(entries, mapping.Entry{
+			MapType:     mapTypeEventCode,
+			Code:        c,
+			EventCode:   defaultEventCodes[c],
+			Description: eventCodeDescriptions[c],
+		})
 	}
 	return entries
 }
@@ -79,16 +135,19 @@ func ApplyMappings(byModel mapping.ByModel) {
 }
 
 // eventForCode resolves a raw FLEX event id to an event label for the universal
-// message. It returns ("", false) for the reserved current-state id (routine ~C
-// telemetry, no event). Otherwise it returns the mapped ACM code, or a raw
-// "NTC:<code>" passthrough when the code is not yet mapped, so events are never
-// silently dropped.
+// message, returning ("", false) when the record is routine telemetry (no event).
+// Order: the reserved current-state id is routine; an explicit (admin or default)
+// mapping wins next; the timer family is routine; anything else passes through as
+// "NTC:<code>" so unknown events are never silently dropped.
 func eventForCode(eventID uint16) (string, bool) {
 	if eventID == eventCurrentState {
 		return "", false
 	}
 	if code, ok := activeEventCodes()[int(eventID)]; ok && code != "" {
 		return code, true
+	}
+	if routineEventCodes[eventID] {
+		return "", false
 	}
 	return fmt.Sprintf("NTC:%d", eventID), true
 }
