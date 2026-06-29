@@ -325,6 +325,7 @@ func (s *session) handleFlexNegotiation(body []byte) error {
 		"event": "flex_negotiated", "serial": s.serial,
 		"proto_ver": protoVer, "struct_ver": structVer,
 		"fields": len(mask.fields), "record_len": mask.recordLen,
+		"field_list": mask.fields,
 	})
 	if err := s.replyFlex(capVersion(protoVer), capVersion(structVer)); err != nil {
 		return nil
@@ -398,6 +399,7 @@ func (s *session) decodeRecords(data []byte, count int) {
 			log.Debug(map[string]any{"event": "record_decode_error", "serial": s.serial, "error": err.Error()})
 			continue
 		}
+		log.Debug(map[string]any{"event": "record_raw", "serial": s.serial, "hex": fmt.Sprintf("%x", data[start:end])})
 		if s.gate != gateApproved || !rec.HasLat || !rec.HasLon {
 			continue // P1: forward only positioned records as GPS; events come later
 		}
