@@ -399,7 +399,6 @@ func (s *session) decodeRecords(data []byte, count int) {
 			log.Debug(map[string]any{"event": "record_decode_error", "serial": s.serial, "error": err.Error()})
 			continue
 		}
-		log.Debug(map[string]any{"event": "record_raw", "serial": s.serial, "hex": fmt.Sprintf("%x", data[start:end])})
 		if s.gate != gateApproved || !rec.HasLat || !rec.HasLon {
 			continue // P1: forward only positioned records as GPS; events come later
 		}
