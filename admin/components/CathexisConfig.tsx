@@ -110,11 +110,12 @@ export function CathexisConfig({ serial }: { serial: string; unit?: string; slee
     if (!dirtySeg(seg)) return;
     const body = buildPayload(seg);
     if (!body) return;
+    const warn = seg === "network" ? " Changing the server address or port can disconnect the unit from the gateway." : "";
     if (
       !(await confirm({
         title: `Save ${label}`,
-        body: "Applying config reboots the unit to take effect — it will disconnect for about a minute. Continue?",
-        confirmLabel: "Save & reboot",
+        body: `Apply these ${label} changes to the device?${warn}`,
+        confirmLabel: "Save",
       }))
     )
       return;
@@ -123,9 +124,12 @@ export function CathexisConfig({ serial }: { serial: string; unit?: string; slee
     setNotice(null);
     try {
       await api(`units/${encodeURIComponent(serial)}/config`, { method: "PUT", body: JSON.stringify({ sc: body }) });
-      // The device reboots to apply; don't auto-reload (it's offline now).
-      setSc((p) => ({ ...p, ...clone(draft) })); // optimistic: treat draft as the new baseline
-      setNotice(`${label} saved — the unit is rebooting to apply. Reload in about a minute to confirm.`);
+      // Treat the draft as the new baseline (clears the dirty marker). Some changes
+      // apply immediately; a few only take effect after the unit restarts (use the
+      // Reboot button on the Status tab if a setting doesn't seem to take). Reload
+      // to re-read the device's current values.
+      setSc((p) => ({ ...p, ...clone(draft) }));
+      setNotice(`${label} saved.`);
     } catch (e: any) {
       setError(e.message || "Save failed");
     } finally {

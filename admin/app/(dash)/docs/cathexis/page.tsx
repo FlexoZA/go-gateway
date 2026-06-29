@@ -337,12 +337,12 @@ export default function CathexisDocsPage() {
           <code>{`{ "event": [["key","value"], …] }`}</code> form.
         </li>
       </ul>
-      <Callout tone="warn" title="Writing config reboots the unit">
-        Applying any config change reboots the device so it takes effect on boot — it disconnects for
-        about a minute, and the write returns <code>{`{ "ok": true }`}</code> with an empty read-back
-        (the unit is already rebooting). <code>eventpreviews</code> is <strong>not</strong> writable
-        via this endpoint. A request while the unit is in standby returns <code>409</code> — wake it
-        first (see Commands).
+      <Callout tone="warn" title="Applying config">
+        Most changes apply immediately; a few only take effect after the unit restarts — if a setting
+        doesn&rsquo;t seem to take, reboot the device (the <strong>Reboot device</strong> button on the
+        Status tab, or <code>reboot_unit</code>). <code>eventpreviews</code> is <strong>not</strong>{" "}
+        writable via this endpoint. A request while the unit is in standby returns <code>409</code> —
+        wake it first (see Commands).
       </Callout>
 
       {/* ---------------------------------------------------------------- */}

@@ -7,6 +7,7 @@ import { useFetch } from "@/lib/useFetch";
 import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
 import { deviceConfigKind } from "@/lib/deviceConfig";
 import { Badge, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
+import { useConfirm } from "@/components/confirm";
 import { DeviceConfig } from "@/components/DeviceConfig";
 import { CathexisConfig } from "@/components/CathexisConfig";
 import { DeviceVideo } from "@/components/DeviceVideo";
@@ -73,6 +74,36 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
       setWakeErr(e.message || "Failed to wake device");
     } finally {
       setWaking(false);
+    }
+  }
+
+  // Manual device reboot (Status tab). Available whenever the unit advertises the
+  // reboot_unit command (Cathexis + Howen).
+  const confirm = useConfirm();
+  const canReboot = !!conn?.commands?.includes("reboot_unit");
+  const [rebooting, setRebooting] = useState(false);
+  const [rebootMsg, setRebootMsg] = useState<string | null>(null);
+  async function reboot() {
+    if (
+      !(await confirm({
+        title: "Reboot device?",
+        body: "The unit will restart and disconnect for about a minute, then reconnect on its own.",
+        confirmLabel: "Reboot",
+      }))
+    )
+      return;
+    setRebooting(true);
+    setRebootMsg(null);
+    try {
+      await api(`units/${encodeURIComponent(serial)}/commands`, {
+        method: "POST",
+        body: JSON.stringify({ type: "reboot_unit" }),
+      });
+      setRebootMsg("Reboot sent — the unit will reconnect shortly.");
+    } catch (e: any) {
+      setRebootMsg(e.message || "Failed to reboot device");
+    } finally {
+      setRebooting(false);
     }
   }
 
@@ -177,6 +208,14 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
           <KV k="First seen" v={fmt(reg?.first_seen_at)} />
           <KV k="Last seen" v={fmt(reg?.last_seen_at)} />
           <KV k="Commands" v={conn?.commands?.length ? `${conn.commands.length} available` : "—"} />
+          {online && canReboot && (
+            <div className="mt-3 border-t border-edge pt-3">
+              <button className="btn-ghost w-full" onClick={reboot} disabled={rebooting}>
+                {rebooting ? "Rebooting…" : "Reboot device"}
+              </button>
+              {rebootMsg && <p className="mt-2 text-xs text-slate-400">{rebootMsg}</p>}
+            </div>
+          )}
         </Card>
 
         {/* Mobile network / 4G */}
