@@ -138,6 +138,16 @@ func TestEndToEndHandshakeAndTelemetry(t *testing.T) {
 		if sp, _ := gps["speed"].(float64); sp != 60.5 {
 			t.Fatalf("gps.speed = %v, want 60.5", gps["speed"])
 		}
+		// The record's event id (100, non-0xFF00) is a real event; unmapped, it
+		// passes through as "NTC:100".
+		events, _ := msg["events"].([]any)
+		if len(events) == 0 {
+			t.Fatalf("expected an event, got none: %v", msg["events"])
+		}
+		first, _ := events[0].([]any)
+		if len(first) == 0 || first[0] != "NTC:100" {
+			t.Fatalf("event = %v, want NTC:100", events)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for webhook")
 	}

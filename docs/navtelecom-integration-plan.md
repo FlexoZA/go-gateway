@@ -278,8 +278,17 @@ Add `HasConfig` (+ `ConfigController`) once §6 is modelled; `HasCommands` (+
   `decodeRecord`) — all green under `-race`.
   **Still needs:** validation against a real S-2011 capture (handshake bytes,
   CRC8 seed, endianness, lat/lon) and a golden test built from it — see §9.
-- **P2 — events.** `MappingProvider` for field-2 codes + field-4 status; seed
-  defaults from the customer's event config.
+- **P2 — events. ✅ DONE (mechanism) — needs the fleet's code list to seed.**
+  `gateway.MappingProvider` wired (`events.go`, map type `event_code`): the raw
+  FLEX field-2 event id maps to an ACM code via the admin Device Mapping screen,
+  applied live. Records with event id `0xFF00` (routine ~C telemetry) forward as
+  GPS; any other id is a real event (~A/~T) and forwards as an `event` message —
+  mapped to its ACM code if known, else passed through as `NTC:<code>` so nothing
+  is lost and operators can discover which codes to map. The built-in default
+  table is empty (Navtelecom codes are device-configured, not protocol-fixed), so
+  meaningful mappings need the unit's event-code configuration (then added in the
+  admin, no redeploy). Field-4 device-status-bit events (need transition tracking)
+  are still deferred.
 - **P3 — config.** `ConfigController` (`*!READ`/`*!EDITS`) once the page/tag
   schema is available; admin config screen lights up automatically.
 - **P4 (optional) — commands.** `Commander` for outputs / reboot / modes.
