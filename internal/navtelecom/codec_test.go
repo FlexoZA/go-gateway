@@ -2,10 +2,22 @@ package navtelecom
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"math"
 	"strings"
 	"testing"
 )
+
+// hexBytes decodes a hex string (spaces allowed) into bytes, failing the test on
+// a malformed input.
+func hexBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(strings.ReplaceAll(s, " ", ""))
+	if err != nil {
+		t.Fatalf("bad hex %q: %v", s, err)
+	}
+	return b
+}
 
 // crc8Bitwise is the spec's alternate (Java) CRC8: poly 0x31, init 0xFF, no
 // reflection. Used to independently validate the lookup table in codec.go.
@@ -74,9 +86,10 @@ func TestNTCBHeaderRoundTrip(t *testing.T) {
 	}
 }
 
-// setBit sets the FLEX mask bit for a 1-based field number (LSB of byte 0 = field 1).
+// setBit sets the FLEX mask bit for a 1-based field number. The wire format is
+// MSB-first within each byte: field 1 = bit 7 of byte 0 (spec §1.2.1).
 func setBit(bits []byte, field int) {
-	bits[(field-1)/8] |= 1 << ((field - 1) % 8)
+	bits[(field-1)/8] |= 1 << (7 - ((field - 1) % 8))
 }
 
 // buildMask returns a mask byte slice covering dataSize fields with the given
@@ -112,6 +125,84 @@ func TestParseFlexMask(t *testing.T) {
 	// An empty mask is refused.
 	if _, err := parseFlexMask(69, make([]byte, 9)); err == nil {
 		t.Fatal("expected error for empty mask")
+	}
+}
+
+// TestFlexMaskBitOrder locks the MSB-first wire order using the spec's own
+// example (§1.2.1): mask bytes 0x00 0xE0 0x00 → fields 9, 10, 11.
+func TestFlexMaskBitOrder(t *testing.T) {
+	bits := []byte{0x00, 0xE0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	m, err := parseFlexMask(69, bits)
+	if err != nil {
+		t.Fatalf("parseFlexMask: %v", err)
+	}
+	want := []int{9, 10, 11}
+	if len(m.fields) != len(want) {
+		t.Fatalf("fields = %v, want %v", m.fields, want)
+	}
+	for i, f := range want {
+		if m.fields[i] != f {
+			t.Fatalf("fields = %v, want %v", m.fields, want)
+		}
+	}
+}
+
+// TestRealCaptureGolden decodes a record captured from a real START S-2011 (in
+// Gauteng, South Africa) to lock the wire format end to end: the MSB-first mask
+// 0xFF 0xFE 0x30 0x0A 0x08 selects 20 fields, and the 51-byte record decodes to a
+// valid Gauteng fix. Captured 2026-06-29 from IMEI 863151075601887.
+func TestRealCaptureGolden(t *testing.T) {
+	maskBits := []byte{0xFF, 0xFE, 0x30, 0x0A, 0x08, 0x00, 0x00, 0x00, 0x00}
+	m, err := parseFlexMask(69, maskBits)
+	if err != nil {
+		t.Fatalf("parseFlexMask: %v", err)
+	}
+	wantFields := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 19, 20, 29, 31, 37}
+	if len(m.fields) != len(wantFields) {
+		t.Fatalf("fields = %v, want %v", m.fields, wantFields)
+	}
+	for i, f := range wantFields {
+		if m.fields[i] != f {
+			t.Fatalf("fields = %v, want %v", m.fields, wantFields)
+		}
+	}
+	if m.recordLen != 51 {
+		t.Fatalf("recordLen = %d, want 51", m.recordLen)
+	}
+
+	raw := hexBytes(t, "940000000b17388f426a006b28113f388f426a393111ffcec6ff00163e0000"+
+		"0000000028005af4bb3e50004011000000000000")
+	if len(raw) != 51 {
+		t.Fatalf("raw record = %d bytes, want 51", len(raw))
+	}
+	r, err := decodeRecord(m, raw)
+	if err != nil {
+		t.Fatalf("decodeRecord: %v", err)
+	}
+	if r.RecordNum != 148 || r.EventID != 5899 {
+		t.Fatalf("record=%d event=%d, want 148/5899", r.RecordNum, r.EventID)
+	}
+	if !r.positioning() {
+		t.Fatal("expected a valid fix")
+	}
+	if sats, _ := r.satellites(); sats != 15 {
+		t.Fatalf("satellites = %d, want 15", sats)
+	}
+	p := buildPayload(testIMEI, r)
+	if lat, _ := p["latitude"].(float64); lat < -26.0843 || lat > -26.0841 {
+		t.Fatalf("latitude = %v, want ~-26.0842 (Gauteng)", p["latitude"])
+	}
+	if lon, _ := p["longitude"].(float64); lon < 27.9375 || lon > 27.9377 {
+		t.Fatalf("longitude = %v, want ~27.9376 (Gauteng)", p["longitude"])
+	}
+	if p["speed"] != float64(0) {
+		t.Fatalf("speed = %v, want 0 (parked)", p["speed"])
+	}
+	if p["bearing"] != float64(40) {
+		t.Fatalf("bearing = %v, want 40", p["bearing"])
+	}
+	if p["altitude"] != float64(1589.4) {
+		t.Fatalf("altitude = %v, want 1589.4", p["altitude"])
 	}
 }
 

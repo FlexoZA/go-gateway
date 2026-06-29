@@ -195,15 +195,17 @@ type flexMask struct {
 }
 
 // parseFlexMask turns the negotiation bitfield into an ordered field list and a
-// record length. dataSize is the negotiated field count; bits is the raw mask
-// (LSB of byte 0 = field 1). An error is returned if a set bit names a field
-// whose size this build doesn't know — we'd be unable to frame records, so the
-// session refuses the connection rather than mis-decode.
+// record length. dataSize is the negotiated field count; bits is the raw mask.
+// The mask is MSB-first within each byte: field 1 is bit 7 of byte 0, field 2
+// bit 6, … field 8 bit 0, field 9 bit 7 of byte 1, and so on (spec §1.2.1, e.g.
+// mask 0x00 0xE0 → fields 9,10,11). An error is returned if a set bit names a
+// field whose size this build doesn't know — we'd be unable to frame records, so
+// the session refuses the connection rather than mis-decode.
 func parseFlexMask(dataSize int, bits []byte) (flexMask, error) {
 	var m flexMask
 	for field := 1; field <= dataSize; field++ {
 		byteIdx := (field - 1) / 8
-		bitIdx := (field - 1) % 8
+		bitIdx := 7 - ((field - 1) % 8)
 		if byteIdx >= len(bits) {
 			break
 		}
