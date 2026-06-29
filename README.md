@@ -15,8 +15,8 @@ small interface, and `app.Run(...)` takes one or more of them. That yields two
 deployment shapes from the same code:
 
 - **Multi-unit** (`cmd/gateway`, the default `deploy/docker-compose.yml`): one
-  process hosts every registered unit — today **Howen**, **Fleetiger**, and
-  **Cathexis** — each on its own TCP port, behind one shared registry, webhook,
+  process hosts every registered unit — today **Howen**, **Fleetiger**,
+  **Cathexis**, and **Navtelecom** — each on its own TCP port, behind one shared registry, webhook,
   HTTP API, and admin panel. Simplest to run as a single box.
 - **One unit per server** (`scripts/provision-server.sh <unit>`, building the
   lean `cmd/<unit>` image): only that protocol compiles in, so a GPS-only
@@ -184,7 +184,7 @@ node tools/gen-webhook-golden.mjs /path/to/dfm-mvr-gateway
 ## Architecture
 
 ```
-cmd/gateway/main.go            multi-unit entrypoint: app.Run(howen, fleetiger, cathexis)
+cmd/gateway/main.go            multi-unit entrypoint: app.Run(howen, fleetiger, cathexis, navtelecom)
 cmd/howen/main.go              lean single-unit entrypoint: app.Run(howen.New())
 internal/
   core/                        protocol-agnostic framework
@@ -231,7 +231,7 @@ func main() { app.Run(howen.New()) }
 ```
 
 `cmd/gateway` instead passes several — `app.Run(howen.New(), fleetiger.New(),
-cathexis.New())` — to host all of them in one process.
+cathexis.New(), navtelecom.New())` — to host all of them in one process.
 
 Richer units add features by setting the matching `Capabilities` flag **and**
 implementing the optional interface the framework detects:
@@ -366,5 +366,7 @@ message golden parity test (`internal/core/message`).
   (read/write all parameter segments) from the admin panel. Datahub/OBD frames
   (ec 771) are forwarded as `gps` telemetry with CAN/OBD values in `sensors`.
 - **Milestone 3 (in progress):** additional unit types via the scaffold —
-  **Fleetiger** (GT06-style GPS) and **Cathexis** (MVR video + config) are wired
-  into the multi-unit gateway.
+  **Fleetiger** (GT06-style GPS), **Cathexis** (MVR video + config), and
+  **Navtelecom** (NTCB/FLEX GPS, e.g. START S-2011 — GPS/IO telemetry; config &
+  commands deferred, see [docs/navtelecom-integration-plan.md](docs/navtelecom-integration-plan.md))
+  are wired into the multi-unit gateway.
