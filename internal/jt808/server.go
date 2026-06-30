@@ -287,8 +287,13 @@ func (s *session) handleLocation(ctx context.Context, h header, body []byte) {
 	kind := "gps"
 	if isEvent {
 		kind = "event"
-		s.log().Debug(map[string]any{"event": "event_forward", "serial": s.serial, "mapped_events": payload["event"], "alarm": loc.Alarm})
 	}
+	s.log().Debug(map[string]any{
+		"event": "location_forward", "serial": s.serial, "kind": kind,
+		"lat": loc.Latitude, "lon": loc.Longitude, "speed_kmh": loc.Speed,
+		"bearing": loc.Direction, "utc": loc.TimeUTC, "alarm": loc.Alarm,
+		"mapped_events": payload["event"],
+	})
 	s.conn.Emit(s.serial, deviceMake, s.model, kind, payload)
 }
 
