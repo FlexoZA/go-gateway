@@ -123,6 +123,34 @@ func TestRegisterAndLocation(t *testing.T) {
 	}
 }
 
+// TestTzOffsetUnitSetting: the editable per-unit timezone setting overrides the
+// global env offset, and the global is the fallback when no setting is present.
+func TestTzOffsetUnitSetting(t *testing.T) {
+	settings := gateway.NewUnitSettings()
+	settings.Replace(map[string]string{settingTimezoneOffset: "2"})
+	withSetting := &session{conn: &gateway.Conn{Deps: gateway.Deps{
+		Config:       config.Config{DeviceTZOffsetHours: 0},
+		UnitSettings: settings,
+	}}}
+	if got := withSetting.tzOffset(); got != 2 {
+		t.Fatalf("tzOffset = %v, want 2 (unit setting overrides global)", got)
+	}
+	fallback := &session{conn: &gateway.Conn{Deps: gateway.Deps{
+		Config: config.Config{DeviceTZOffsetHours: 5},
+	}}}
+	if got := fallback.tzOffset(); got != 5 {
+		t.Fatalf("tzOffset = %v, want 5 (global fallback)", got)
+	}
+}
+
+// TestSettingsSchema: the unit exposes its editable timezone setting.
+func TestSettingsSchema(t *testing.T) {
+	fields := (&Protocol{}).SettingsSchema()
+	if len(fields) != 1 || fields[0].Key != settingTimezoneOffset || fields[0].Type != "number" {
+		t.Fatalf("settings schema = %+v", fields)
+	}
+}
+
 // TestEventLocationForwarded: a location with the collision alarm bit set is
 // forwarded carrying the COLLISION event code.
 func TestEventLocationForwarded(t *testing.T) {

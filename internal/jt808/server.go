@@ -1,9 +1,12 @@
 // Package jt808 implements the JT/T 808-2019 unit type for the N62 fleet dashcam
 // as a gateway plugin: registration/auth, GPS + event telemetry to the universal
 // webhook, device parameter config (ConfigController over ULV 0xB050/0xB051), a
-// live status snapshot (StatusReporter from ULV transparent 0x0900), and control
-// commands (Commander). Live video / clips / snapshots arrive in a later phase
-// over a separate media port (see docs/jt808-integration-plan.md).
+// live status snapshot (StatusReporter from ULV transparent 0x0900), control
+// commands (Commander), an editable per-unit timezone setting (ConfigurableUnit),
+// and JT1078 video over a separate media port — live HLS (VideoController +
+// MediaServerProvider), recorded clips, and a recording file query (see media.go,
+// video.go, recordings.go). On-demand snapshots (snapshot.go) are wired but
+// declared off, as the validated N62 firmware ignores the camera-shoot command.
 //
 // Wire format and command set are ported from the old Node gateway
 // (dfm-mvr-gateway/src/tcp/jt808Server.js), validated against this exact device.
@@ -71,6 +74,25 @@ func (*Protocol) IdleTimeout() time.Duration { return idleTimeout }
 // vendor-TLV → event-code tables (see events.go).
 func (*Protocol) DefaultMappingEntries() []mapping.Entry { return DefaultMappingEntries() }
 func (*Protocol) ApplyMappings(byModel mapping.ByModel)  { ApplyMappings(byModel) }
+
+// settingTimezoneOffset is the editable per-unit setting key for the device's
+// local-clock offset from UTC.
+const settingTimezoneOffset = "timezone_offset"
+
+// SettingsSchema declares the unit's editable gateway-side settings (rendered as
+// the JT808 settings screen). Implements gateway.ConfigurableUnit. The timezone
+// offset converts the N62's local wall-clock (in 0x0200 locations and the video
+// time windows) to/from UTC, editable from the admin without a redeploy.
+func (*Protocol) SettingsSchema() []gateway.SettingField {
+	return []gateway.SettingField{{
+		Key:     settingTimezoneOffset,
+		Label:   "Device timezone offset (hours)",
+		Type:    "number",
+		Default: "0",
+		Help:    "The N62 reports local wall-clock with no timezone. Set e.g. 2 for SAST, or 0 if the device already sends UTC (GpsSync). Applies to location timestamps and recorded-video time windows.",
+		Group:   "Time",
+	}}
+}
 
 // ReadFrame decodes one JT808 frame: it scans to a 0x7e start flag, reads to the
 // next flag, unescapes, validates the XOR checksum, and returns the message ID as
@@ -157,6 +179,17 @@ type session struct {
 
 func (s *session) log() *logging.Logger { return s.conn.Deps.Log.With(logNS) }
 
+// tzOffset is the device's local-clock offset from UTC: the editable per-unit
+// setting (SettingsSchema), falling back to the env-configured global (and for
+// tests, which build Deps without a settings holder).
+func (s *session) tzOffset() float64 {
+	tz := s.conn.Deps.Config.DeviceTZOffsetHours
+	if us := s.conn.Deps.UnitSettings; us != nil {
+		tz = us.Float(settingTimezoneOffset, tz)
+	}
+	return tz
+}
+
 // nextPlatSerial returns the next platform message serial (starts at 0, wraps).
 func (s *session) nextPlatSerial() uint16 {
 	s.serialMu.Lock()
@@ -204,7 +237,7 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		return nil
 	case msgResourceList:
 		// Unsolicited recording-list reply to a 0x9205 query; no platform ack.
-		recs := parseResourceList(body, s.conn.Deps.DeviceTZOffsetHours)
+		recs := parseResourceList(body, s.tzOffset())
 		s.deliverPending(msgResourceList, map[string]any{"recordings": recs})
 		return nil
 	case msgTermAttrs:
@@ -317,7 +350,7 @@ func (s *session) handleLocation(ctx context.Context, h header, body []byte) {
 	if !s.approved {
 		return
 	}
-	loc, ok := parseLocation(body, s.conn.Deps.DeviceTZOffsetHours)
+	loc, ok := parseLocation(body, s.tzOffset())
 	if !ok {
 		s.log().Debug(map[string]any{"event": "bad_location", "serial": s.serial, "len": len(body)})
 		return

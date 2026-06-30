@@ -147,7 +147,7 @@ func (s *session) RequestClip(ctx context.Context, req gateway.ClipRequest) (gat
 		return gateway.ClipInfo{}, err
 	}
 	channel, streamType := channelStream(req.Camera, req.Profile)
-	tz := s.conn.Deps.DeviceTZOffsetHours
+	tz := s.tzOffset()
 
 	clipID, ss, err := s.conn.Deps.Clips.NewClip(ctx, s.serial, req.Camera, req.Profile, req.StartUTC, req.EndUTC)
 	if err != nil {

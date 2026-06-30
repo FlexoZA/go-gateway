@@ -22,7 +22,7 @@ func (s *session) QueryRecordings(ctx context.Context, camera, profile int, star
 	if camera >= 0 {
 		channel = camera + 1
 	}
-	tz := s.conn.Deps.DeviceTZOffsetHours
+	tz := s.tzOffset()
 
 	body := []byte{byte(channel)}
 	body = append(body, bcdTimeFromUTC(startUTC, tz)...)
