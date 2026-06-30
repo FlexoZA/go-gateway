@@ -16,6 +16,11 @@ func TestMapHowenEventCodesTrace(t *testing.T) {
 		wantCode  int
 		wantSrc   string
 	}{
+		// Input-driven: a panic button that carries num=1.
+		{"input num→panic", 5, map[string]any{"num": "1"}, "PANIC", "input", 1, traceTable},
+		// Panic arriving as ec=5 with no `num`: resolves via the event-code table,
+		// and must be attributed there — not reported as "input code 0 unmapped".
+		{"panic no num→event_code", 5, nil, "PANIC", "event_code", 5, traceTable},
 		// Table-driven: a g-sensor direction that maps to COLLISION.
 		{"vibration→collision", 12, map[string]any{"dt": "4"}, "COLLISION", "vibration_direction", 4, traceTable},
 		// Table-driven: DMS/ADAS type that maps to a cellphone alert.
