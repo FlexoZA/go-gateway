@@ -288,12 +288,19 @@ func (s *session) handleLocation(ctx context.Context, h header, body []byte) {
 	if isEvent {
 		kind = "event"
 	}
-	s.log().Debug(map[string]any{
+	fields := map[string]any{
 		"event": "location_forward", "serial": s.serial, "kind": kind,
 		"lat": loc.Latitude, "lon": loc.Longitude, "speed_kmh": loc.Speed,
 		"bearing": loc.Direction, "utc": loc.TimeUTC, "alarm": loc.Alarm,
 		"mapped_events": payload["event"],
-	})
+	}
+	// Events log at Info so they're visible without per-frame GPS debug noise;
+	// plain GPS stays at Debug.
+	if isEvent {
+		s.log().Info(fields)
+	} else {
+		s.log().Debug(fields)
+	}
 	s.conn.Emit(s.serial, deviceMake, s.model, kind, payload)
 }
 
