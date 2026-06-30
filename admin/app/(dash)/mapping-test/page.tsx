@@ -20,7 +20,8 @@ import { Badge, Empty, ErrorBanner, PageHeader } from "@/components/ui";
 type Unit = { serial: string; protocol: string; model: string; state?: string };
 
 type TraceEntry = {
-  ec: number;
+  ec?: number;
+  name?: string; // raw device event name (Cathexis)
   map_type?: string;
   code: number;
   event_code: string;
@@ -38,7 +39,7 @@ type LiveResp = { entries: Entry[]; cursor: number; capture_level: string };
 type Fired = {
   seq: number;
   time: string;
-  ec: number;
+  ec: number | null;
   model: string;
   mapped: string[];
   trace: TraceEntry[];
@@ -116,11 +117,14 @@ export default function MappingTestPage() {
         const fired: Fired[] = [];
         for (const e of res.entries) {
           const f = e.fields || {};
-          if (f.event !== "alarm_forward" || String(f.serial) !== effectiveSerial) continue;
+          // Howen logs alarm_forward; Cathexis logs event_forward. Both carry
+          // serial, mapped_events and the mapping_trace.
+          const isEvent = f.event === "alarm_forward" || f.event === "event_forward";
+          if (!isEvent || String(f.serial) !== effectiveSerial) continue;
           fired.push({
             seq: e.seq,
             time: e.time,
-            ec: Number(f.ec),
+            ec: f.ec != null && f.ec !== "" ? Number(f.ec) : null,
             model: String(f.model || ""),
             mapped: Array.isArray(f.mapped_events) ? f.mapped_events.map(String) : [],
             trace: Array.isArray(f.mapping_trace) ? (f.mapping_trace as TraceEntry[]) : [],
@@ -220,7 +224,7 @@ function FiredCard({ ev }: { ev: Fired }) {
     <div className="card">
       <div className="mb-2 flex items-center gap-3 text-xs text-slate-400">
         <span className="font-mono text-slate-300">{ev.time.slice(11, 23)}</span>
-        <span className="font-mono">EC {ev.ec}</span>
+        {ev.ec != null && <span className="font-mono">EC {ev.ec}</span>}
         {ev.model && <span>· {ev.model}</span>}
       </div>
       <div className="space-y-1">
@@ -238,7 +242,12 @@ function TraceLine({ t }: { t: TraceEntry }) {
   const unmapped = t.source === "fallback";
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
-      {t.map_type ? (
+      {t.name ? (
+        // Cathexis: the device's own event name is the natural identity.
+        <span className="font-mono text-slate-400">
+          <span className="text-indigo-300">{t.name}</span> <span className="text-slate-500">(code {t.code})</span>
+        </span>
+      ) : t.map_type ? (
         <span className="font-mono text-slate-400">
           <span className="text-indigo-300">{t.map_type}</span> code <span className="text-slate-100">{t.code}</span>
         </span>

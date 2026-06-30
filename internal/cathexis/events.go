@@ -171,12 +171,42 @@ func sanitizeEventKey(name string) string {
 	return strings.Trim(out, "_")
 }
 
+// mapTraceSource classifies how one device event name resolved: it matched a
+// mapping row ("table") or nothing did and it fell back to "ALARM" ("fallback").
+// The live mapping test mode highlights "fallback" entries so an operator can
+// see device events that have no mapping yet.
+const (
+	traceTable    = "table"
+	traceFallback = "fallback"
+)
+
+// mapTraceEntry records how one raw device event name resolved against the
+// editable mapping table, for the live mapping test mode. It is logged (debug)
+// alongside event_forward and never affects the universal message sent to sinks.
+// The JSON shape matches the Howen trace (plus the device event name, which is
+// Cathexis's natural identity for an event).
+type mapTraceEntry struct {
+	Name      string `json:"name"`               // raw device event name (e.g. "harsh_braking")
+	MapType   string `json:"map_type,omitempty"` // always "event" for Cathexis
+	Code      int    `json:"code"`               // synthetic code the name resolves to
+	EventCode string `json:"event_code"`         // resolved standard code ("ALARM" when unmapped)
+	Source    string `json:"source"`             // traceTable | traceFallback
+}
+
 // toStandardEventCodes derives the standard event-code list from a device payload.
 // It reads payload.event (array or string) and payload.name, resolves each via
 // the active (admin-editable) map (device name → synthetic code → event_code),
 // falling back to "ALARM" for unknown names, and dedupes. An event message with
 // nothing recognizable yields ["ALARM"].
 func toStandardEventCodes(payload map[string]any, isEvent bool) []any {
+	out, _ := toStandardEventCodesTrace(payload, isEvent)
+	return out
+}
+
+// toStandardEventCodesTrace is toStandardEventCodes plus a per-name decode trace.
+// The event list it returns is identical to toStandardEventCodes (which is a thin
+// wrapper); the trace is extra provenance for the live mapping test mode.
+func toStandardEventCodesTrace(payload map[string]any, isEvent bool) ([]any, []mapTraceEntry) {
 	var raw []string
 	switch ev := payload["event"].(type) {
 	case []any:
@@ -200,21 +230,26 @@ func toStandardEventCodes(payload map[string]any, isEvent bool) []any {
 	active := activeEventCodes()
 	seen := map[string]bool{}
 	out := []any{}
+	trace := []mapTraceEntry{}
 	for _, name := range raw {
 		key := sanitizeEventKey(name)
 		if key == "" {
 			continue
 		}
 		code := "ALARM"
-		if syn, ok := nameToCode[key]; ok {
-			if ev := active[syn]; ev != "" {
+		syn := nameToCode[key]
+		source := traceFallback
+		if s, ok := nameToCode[key]; ok {
+			if ev := active[s]; ev != "" {
 				code = ev
+				source = traceTable
 			}
 		}
+		trace = append(trace, mapTraceEntry{Name: name, MapType: mapTypeEvent, Code: syn, EventCode: code, Source: source})
 		if !seen[code] {
 			seen[code] = true
 			out = append(out, code)
 		}
 	}
-	return out
+	return out, trace
 }
