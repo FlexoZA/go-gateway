@@ -383,10 +383,10 @@ func (s *session) handleAlarmData(ctx context.Context, payload []byte) error {
 		s.conn.Emit(s.serial, "howen", s.model, "gps", p)
 		return nil
 	}
-	p := buildEventPayload(s.model, parsed, s.imei)
+	p, trace := buildEventPayload(s.model, parsed, s.imei)
 	s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{
 		"event": "alarm_forward", "serial": s.serial, "ec": parsed.EC,
-		"mapped_events": p["event"], "model": s.model,
+		"mapped_events": p["event"], "model": s.model, "mapping_trace": trace,
 	})
 	s.conn.Emit(s.serial, "howen", s.model, "event", p)
 	return nil

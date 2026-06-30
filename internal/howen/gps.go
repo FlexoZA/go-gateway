@@ -198,11 +198,11 @@ func buildDatahubPayload(status *howenStatusData, detail map[string]any, imei st
 // buildEventPayload assembles the payload for an ALARM_DATA message, resolving the
 // event codes against the device model's mapping table (falling back to the unit
 // default then the built-in defaults).
-func buildEventPayload(model string, ap *alarmPayload, imei string) map[string]any {
+func buildEventPayload(model string, ap *alarmPayload, imei string) (map[string]any, []mapTraceEntry) {
 	p := statusCommonFields(ap.Status, imei)
 	p["name"] = "event"
 
-	codes := mapHowenEventCodes(model, ap.EC, ap.Detail, ap.Alarm)
+	codes, trace := mapHowenEventCodesTrace(model, ap.EC, ap.Detail, ap.Alarm)
 	events := make([]any, len(codes))
 	for i, e := range codes {
 		events[i] = e
@@ -236,7 +236,7 @@ func buildEventPayload(model string, ap *alarmPayload, imei string) map[string]a
 	if ap.EventEndUTC != nil {
 		p["event_end_utc"] = float64(*ap.EventEndUTC)
 	}
-	return p
+	return p, trace
 }
 
 func setIntPtr(p map[string]any, key string, v *int) {
