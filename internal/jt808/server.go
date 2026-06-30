@@ -192,6 +192,7 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		// Device ack to a platform command (video start/stop, playback). Correlate
 		// by the acked message id so the right waiter is released. No reply to an ack.
 		ack := parseTermGeneralResp(body)
+		s.log().Debug(map[string]any{"event": "device_ack", "serial": s.serial, "ack_msg_id": fmt.Sprintf("0x%04x", ack["ack_msg_id"]), "result": ack["result"]})
 		if id, ok := ack["ack_msg_id"].(int); ok {
 			s.deliverPending(id, ack)
 		}
