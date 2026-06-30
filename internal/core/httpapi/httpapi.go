@@ -1559,7 +1559,7 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), commandTimeout(cmd.Type))
 	defer cancel()
 
 	result, err := s.hub.Send(ctx, serial, cmd)
@@ -1568,6 +1568,21 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// commandTimeout returns how long to wait for a device's answer to a command.
+// Most control commands answer within a couple of seconds, but wake_device
+// pokes a unit out of standby — it has to bring its modem back up before it can
+// reply, which routinely takes longer than a normal command over cellular. Give
+// it a generous deadline so callers don't see a premature "did not respond in
+// time" while the device is still waking.
+func commandTimeout(cmdType string) time.Duration {
+	switch cmdType {
+	case "wake_device":
+		return 45 * time.Second
+	default:
+		return 12 * time.Second
+	}
 }
 
 // GET /api/devices — approved device registry.

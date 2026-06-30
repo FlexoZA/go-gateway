@@ -160,7 +160,14 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
               {waking ? "Waking…" : "Wake device"}
             </button>
           )}
-          {wakeErr && <span className="text-rose-300">{wakeErr}</span>}
+          {wakeErr && (
+            <span className="flex items-center gap-2 text-rose-300">
+              {wakeErr}
+              <button onClick={() => setWakeErr(null)} aria-label="Dismiss" className="text-rose-300/80 hover:text-rose-100">
+                ✕
+              </button>
+            </span>
+          )}
         </div>
       )}
 
