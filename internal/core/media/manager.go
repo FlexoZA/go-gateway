@@ -56,6 +56,7 @@ type Stream struct {
 	Dir     string // HLS output dir (<root>/<serial>/<camera>/<profile>); empty for clips
 	outFile string // clip .mp4 path; empty for HLS
 	codec   string // input codec for clips: "h264" or "hevc"
+	inFmt   string // ffmpeg input format for a live stream ("h264" default, "mpegps" for JT1078)
 	Started time.Time
 
 	mu         sync.Mutex
@@ -69,10 +70,19 @@ type Stream struct {
 	lastAccess time.Time // last time a viewer fetched the playlist (viewer liveness)
 }
 
-// Register creates (or replaces) a stream entry and its output directory. ffmpeg
-// is started lazily on the first video frame, so a stream the device never
-// connects to costs nothing.
+// Register creates (or replaces) a live stream fed raw H.264 (Annex-B). ffmpeg is
+// started lazily on the first video frame, so a stream the device never connects
+// to costs nothing.
 func (m *Manager) Register(id, serial string, camera, profile int) (*Stream, error) {
+	return m.RegisterInput(id, serial, camera, profile, "h264")
+}
+
+// RegisterInput is Register with an explicit ffmpeg input format, for units whose
+// live stream is not raw H.264 (e.g. JT1078 delivers MPEG-PS → inFmt "mpegps").
+func (m *Manager) RegisterInput(id, serial string, camera, profile int, inFmt string) (*Stream, error) {
+	if inFmt == "" {
+		inFmt = "h264"
+	}
 	dir := filepath.Join(m.hlsRoot, serial, strconv.Itoa(camera), strconv.Itoa(profile))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("media: mkdir %s: %w", dir, err)
@@ -84,10 +94,10 @@ func (m *Manager) Register(id, serial string, camera, profile int) (*Stream, err
 	if old := m.streams[id]; old != nil {
 		old.stop()
 	}
-	s := &Stream{ID: id, Serial: serial, Camera: camera, Profile: profile, Dir: dir, Started: time.Now()}
+	s := &Stream{ID: id, Serial: serial, Camera: camera, Profile: profile, Dir: dir, inFmt: inFmt, Started: time.Now()}
 	m.streams[id] = s
 	m.mu.Unlock()
-	m.log.Debug(map[string]any{"event": "stream_registered", "id": id, "serial": serial, "camera": camera, "profile": profile})
+	m.log.Debug(map[string]any{"event": "stream_registered", "id": id, "serial": serial, "camera": camera, "profile": profile, "in_fmt": inFmt})
 	return s, nil
 }
 
@@ -99,7 +109,9 @@ func (m *Manager) RegisterClip(id, serial string, camera, profile int, outFile, 
 		return nil, fmt.Errorf("media: mkdir %s: %w", filepath.Dir(outFile), err)
 	}
 	_ = os.Remove(outFile) // clear any stale partial from a previous attempt
-	if codec != "hevc" {
+	// codec is the ffmpeg input format: a raw elementary stream ("h264"/"hevc") or
+	// a container ("mpegps", for JT1078 playback). Anything else falls back to h264.
+	if codec != "hevc" && codec != "mpegps" {
 		codec = "h264"
 	}
 
@@ -384,12 +396,16 @@ func (s *Stream) spawn(m *Manager) error {
 			"-y", s.outFile,
 		}
 	} else {
+		inFmt := s.inFmt
+		if inFmt == "" {
+			inFmt = "h264"
+		}
 		playlist := filepath.Join(s.Dir, "stream.m3u8")
 		segments := filepath.Join(s.Dir, "seg_%03d.ts")
 		args = []string{
 			"-hide_banner", "-loglevel", "error",
 			"-fflags", "+genpts",
-			"-f", "h264", "-i", "pipe:0",
+			"-f", inFmt, "-i", "pipe:0",
 			"-an", "-c:v", "copy",
 			"-f", "hls",
 			"-hls_time", strconv.Itoa(m.segDur),

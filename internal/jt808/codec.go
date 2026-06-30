@@ -55,6 +55,13 @@ const (
 	msgVehicleInfoQuery    = 0xb040
 	msgUlvParam            = 0xb050
 	msgTransparentDown     = 0x8900
+
+	// JT1078 video control plane.
+	msgRealtimeAV      = 0x9101 // start live (real-time A/V request)
+	msgStopAV          = 0x9102 // stop live
+	msgPlaybackAV      = 0x9201 // playback request (recorded clip)
+	msgPlaybackControl = 0x9202 // playback control (stop)
+	msgResourceQuery   = 0x9205 // recording resource list query
 )
 
 // General-response result codes (0x8001 byte 4 / 0x8100 byte 2).
@@ -350,6 +357,28 @@ func parseBCDTime(b []byte, offsetHours float64) int64 {
 	}
 	t := time.Date(2000+yy, time.Month(mo), dd, hh, mi, ss, 0, time.UTC)
 	return t.Unix() - int64(offsetHours*3600)
+}
+
+// bcdTimeFromUTC encodes a unix UTC time as BCD[6] YYMMDDHHMMSS in the device's
+// local zone (UTC + offsetHours) — the inverse of parseBCDTime, used for the
+// start/end windows in playback (0x9201) and recording-query (0x9205) requests.
+func bcdTimeFromUTC(unix int64, offsetHours float64) []byte {
+	t := time.Unix(unix, 0).UTC().Add(time.Duration(offsetHours * float64(time.Hour)))
+	enc := func(n int) byte { return byte((n/10)<<4 | n%10) }
+	return []byte{
+		enc(t.Year() % 100), enc(int(t.Month())), enc(t.Day()),
+		enc(t.Hour()), enc(t.Minute()), enc(t.Second()),
+	}
+}
+
+// encodeIP returns a 1-byte length prefix followed by the ASCII host/IP, as the
+// server-address field of the video commands expects.
+func encodeIP(host string) []byte {
+	b := []byte(host)
+	if len(b) > 255 {
+		b = b[:255]
+	}
+	return append([]byte{byte(len(b))}, b...)
 }
 
 // splitBatch splits a 0x0704 batch-location body into its inner 0x0200 bodies.

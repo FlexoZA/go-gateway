@@ -72,7 +72,8 @@ services:
       - "33001:33001"  # howen media
       - "8050:8050"    # fleetiger
       - "4000:4000"    # navtelecom
-      - "6608:6608"    # jt808 control (phase 2 adds 6609 media)
+      - "6608:6608"    # jt808 control
+      - "6609:6609"    # jt808 media (JT1078 video stream)
       - "${LISTEN_PORT:-32324}:${LISTEN_PORT:-32324}"                # cathexis control
       - "${VIDEO_LISTEN_PORT:-32325}:${VIDEO_LISTEN_PORT:-32325}"    # cathexis media (clips)
       - "${STREAM_LISTEN_PORT:-32326}:${STREAM_LISTEN_PORT:-32326}"  # cathexis media (live stream)

@@ -143,6 +143,43 @@ func (r *ClipRegistry) WriteFrame(ss string, isKeyframe bool, data []byte) {
 	}
 }
 
+// WriteMux feeds a clip delivered as a muxed container stream (e.g. JT1078
+// MPEG-PS) to ffmpeg, which remuxes it to the output .mp4 (input format inFmt,
+// e.g. "mpegps"). Unlike WriteFrame there is no keyframe gating — ffmpeg syncs to
+// the container itself — so ffmpeg starts on the first bytes. Pair with Finish.
+func (r *ClipRegistry) WriteMux(ss, inFmt string, data []byte) {
+	s := r.get(ss)
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finalized {
+		return
+	}
+	if !s.started {
+		if _, err := r.mgr.RegisterClip(ss, s.serial, s.camera, s.profile, s.outFile, inFmt); err != nil {
+			r.log.Error(map[string]any{"event": "clip_register_failed", "ss": ss, "error": err.Error()})
+			return
+		}
+		s.started = true
+		ctx, cancel := dbctx()
+		_ = r.store.UpdateClipStatus(ctx, s.clipID, "receiving", "")
+		cancel()
+		r.log.Info(map[string]any{"event": "clip_receiving", "ss": ss, "clip_id": s.clipID, "in_fmt": inFmt})
+	}
+	if err := r.mgr.WriteVideo(ss, data); err != nil {
+		return
+	}
+	s.bytes += int64(len(data))
+	if s.bytes-s.lastProg >= clipProgressBytes {
+		s.lastProg = s.bytes
+		ctx, cancel := dbctx()
+		_ = r.store.UpdateClipProgress(ctx, s.clipID, s.bytes, 0)
+		cancel()
+	}
+}
+
 // Finish finalizes a clip: it closes ffmpeg, records the file size, and marks the
 // clip ready. Idempotent — the first of PLAYBACK_END or media-connection-close
 // wins; later calls are no-ops.

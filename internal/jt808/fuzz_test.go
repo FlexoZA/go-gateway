@@ -27,6 +27,21 @@ func FuzzReadFrame(f *testing.F) {
 	})
 }
 
+// FuzzReadJT1078Frame ensures the media-stream frame reader never panics.
+func FuzzReadJT1078Frame(f *testing.F) {
+	f.Add(buildJT1078Video("100000000327", 1, 0, ptH264, []byte{0, 0, 0, 1, 0x65, 0xaa}))
+	f.Add([]byte{0x30, 0x31, 0x63, 0x64})
+	f.Add([]byte{0x30, 0x31, 0x63, 0x64, 0xff})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		r := bufio.NewReader(bytes.NewReader(data))
+		for i := 0; i < 32; i++ {
+			if _, err := readJT1078Frame(r); err != nil {
+				return
+			}
+		}
+	})
+}
+
 // FuzzParseLocation ensures the location decoder never panics on arbitrary bytes.
 func FuzzParseLocation(f *testing.F) {
 	f.Add(buildLocationBody(0, 1<<1, 1000000, 2000000, 0, 100, 0, time.Unix(1750000000, 0)))

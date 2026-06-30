@@ -34,16 +34,20 @@ const (
 	logNS = "tcp/jt808"
 )
 
-// Protocol is the JT808 unit-type plugin.
-type Protocol struct{}
+// Protocol is the JT808 unit-type plugin. routes is shared between control
+// sessions (which start streams/clips) and the media listener (which routes the
+// device's JT1078 connections); see media.go.
+type Protocol struct {
+	routes *streamRoutes
+}
 
 // New returns a JT808 protocol plugin.
-func New() *Protocol { return &Protocol{} }
+func New() *Protocol { return &Protocol{routes: newStreamRoutes()} }
 
 func (*Protocol) Name() string { return unitName }
 
 func (*Protocol) Capabilities() gateway.Capabilities {
-	return gateway.Capabilities{HasCommands: true, HasConfig: true, HasStatus: true}
+	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true}
 }
 
 // DefaultDevicePort is the JT808 control port the N62 dials (also where it sends
@@ -109,12 +113,13 @@ func (*Protocol) ReadFrame(r *bufio.Reader) (gateway.Frame, error) {
 	}
 }
 
-func (*Protocol) NewSession(c *gateway.Conn) gateway.Session {
-	return &session{conn: c, pending: map[int]chan map[string]any{}}
+func (p *Protocol) NewSession(c *gateway.Conn) gateway.Session {
+	return &session{conn: c, routes: p.routes, pending: map[int]chan map[string]any{}}
 }
 
 type session struct {
 	conn   *gateway.Conn
+	routes *streamRoutes
 	serial string // gateway serial "JT808_<digits>"
 	phone  string // raw terminal-phone digits (for addressing replies)
 	model  string // device model ("N62")
@@ -179,9 +184,17 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		s.ack(h)
 		return nil
 	case msgTermGeneralResp:
-		// Device acking a platform command (e.g. video start, phase 2). Deliver to a
-		// waiter if any; no platform ack for an ack.
-		s.deliverPending(msgTermGeneralResp, parseTermGeneralResp(body))
+		// Device ack to a platform command (video start/stop, playback). Correlate
+		// by the acked message id so the right waiter is released. No reply to an ack.
+		ack := parseTermGeneralResp(body)
+		if id, ok := ack["ack_msg_id"].(int); ok {
+			s.deliverPending(id, ack)
+		}
+		return nil
+	case msgResourceList:
+		// Unsolicited recording-list reply to a 0x9205 query; no platform ack.
+		recs := parseResourceList(body, s.conn.Deps.DeviceTZOffsetHours)
+		s.deliverPending(msgResourceList, map[string]any{"recordings": recs})
 		return nil
 	case msgTermAttrs:
 		s.deliverPending(msgTermAttrs, parseTermAttrs(body))
@@ -373,7 +386,7 @@ func (s *session) request(ctx context.Context, key int, frame []byte) (map[strin
 // ---- Commander ----
 
 func (s *session) SupportedCommands() []string {
-	return []string{"reboot_unit", "request_environment", "request_vehicle_info", "request_basic_status"}
+	return []string{"reboot_unit", "request_environment", "request_vehicle_info", "request_basic_status", "stop_playback"}
 }
 
 func (s *session) SendCommand(ctx context.Context, cmd gateway.Command) (gateway.CommandResult, error) {
@@ -408,6 +421,18 @@ func (s *session) SendCommand(ctx context.Context, cmd gateway.Command) (gateway
 
 	case "request_basic_status":
 		return s.requestBasicStatus(ctx, cmd)
+
+	case "stop_playback":
+		camera := 0
+		if cmd.Payload != nil {
+			if v, ok := cmd.Payload["camera"].(float64); ok {
+				camera = int(v)
+			}
+		}
+		if err := s.stopPlayback(camera); err != nil {
+			return gateway.CommandResult{}, err
+		}
+		return gateway.CommandResult{Data: map[string]any{"ok": true}, ReceivedAt: now()}, nil
 
 	default:
 		return gateway.CommandResult{}, gateway.ErrUnsupportedCommand
