@@ -47,7 +47,12 @@ func New() *Protocol { return &Protocol{routes: newStreamRoutes()} }
 func (*Protocol) Name() string { return unitName }
 
 func (*Protocol) Capabilities() gateway.Capabilities {
-	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true, HasSnapshots: true}
+	// HasSnapshots is false: the validated N62 firmware ignores the on-demand
+	// camera-shoot command (0x8801) — it sends no response at all — so the capture
+	// UI would always fail. The Snapshotter methods and the auto-push 0x0801
+	// handler remain (stills the device pushes on events/interval are still
+	// reassembled and saved); flip this to true for firmware that supports 0x8801.
+	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true}
 }
 
 // DefaultDevicePort is the JT808 control port the N62 dials (also where it sends
