@@ -441,8 +441,14 @@ func mapHowenEventCodesTrace(model string, eventCode any, detail map[string]any,
 		inputType, _ := numberOrNullInt(detailGet(detail, "num"))
 		if v, ok := m.Input[inputType]; ok {
 			rec("input", inputType, v, traceTable)
+		} else if v := m.EventCode[code]; v != "" {
+			// No matching input row — the alarm resolves via the event-code table
+			// for this EC instead (e.g. a panic that arrives as ec=5 with no `num`
+			// sub-field). Attribute it there so the trace reads "event_code 5 →
+			// PANIC", not a misleading "input code 0 unmapped".
+			rec("event_code", code, v, traceTable)
 		} else {
-			rec("input", inputType, m.EventCode[code], traceFallback)
+			rec("input", inputType, "", traceFallback)
 		}
 	case code == 7 || code == 27 || code == 48:
 		if hasEndTime() {

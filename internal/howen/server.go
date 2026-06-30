@@ -387,6 +387,7 @@ func (s *session) handleAlarmData(ctx context.Context, payload []byte) error {
 	s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{
 		"event": "alarm_forward", "serial": s.serial, "ec": parsed.EC,
 		"mapped_events": p["event"], "model": s.model, "mapping_trace": trace,
+		"detail": parsed.DetailRaw,
 	})
 	s.conn.Emit(s.serial, "howen", s.model, "event", p)
 	return nil
