@@ -76,6 +76,7 @@ type DataStore interface {
 	ListAPIKeyMeta(ctx context.Context) ([]map[string]any, error)
 	CreateAPIKey(ctx context.Context, name string) (string, error)
 	RevokeAPIKey(ctx context.Context, prefix string) (int64, error)
+	DeleteAPIKey(ctx context.Context, prefix string) (int64, error)
 
 	ListClips(ctx context.Context, serial string, limit, offset int) ([]map[string]any, error)
 	GetClip(ctx context.Context, id int64) (map[string]any, error)
@@ -1395,7 +1396,9 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"key": key, "name": strings.TrimSpace(body.Name)})
 }
 
-// DELETE /api/api-keys/{prefix} — revoke (deactivate) the key(s) with that prefix.
+// DELETE /api/api-keys/{prefix} — revoke (deactivate) the key(s) with that
+// prefix. With ?hard=true it instead permanently deletes an already-revoked key
+// (active keys must be revoked first; see DeleteAPIKey).
 func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	if !s.dataReady(w) {
 		return
@@ -1407,6 +1410,21 @@ func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+
+	if r.URL.Query().Get("hard") == "true" {
+		n, err := s.data.DeleteAPIKey(ctx, prefix)
+		if err != nil {
+			s.dataError(w, "delete_api_key", err)
+			return
+		}
+		if n == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no revoked key with that prefix (revoke it first)"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
+		return
+	}
+
 	n, err := s.data.RevokeAPIKey(ctx, prefix)
 	if err != nil {
 		s.dataError(w, "revoke_api_key", err)

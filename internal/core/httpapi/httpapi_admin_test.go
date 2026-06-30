@@ -171,6 +171,12 @@ func (f *fakeData) RevokeAPIKey(_ context.Context, prefix string) (int64, error)
 	}
 	return 1, nil
 }
+func (f *fakeData) DeleteAPIKey(_ context.Context, prefix string) (int64, error) {
+	if prefix == "dgw_missing" {
+		return 0, nil
+	}
+	return 1, nil
+}
 
 // sentinel errors matching the store's contract.
 type strErr string
@@ -372,6 +378,14 @@ func TestAPIKeyEndpoints(t *testing.T) {
 	// revoke unknown → 404
 	if rec := do(s, "DELETE", "/api/api-keys/dgw_missing", ""); rec.Code != 404 {
 		t.Fatalf("revoke missing = %d, want 404", rec.Code)
+	}
+	// hard delete a revoked key
+	if rec := do(s, "DELETE", "/api/api-keys/dgw_AbCd1234?hard=true", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), "deleted") {
+		t.Fatalf("delete = %d (%s)", rec.Code, rec.Body)
+	}
+	// hard delete unknown → 404
+	if rec := do(s, "DELETE", "/api/api-keys/dgw_missing?hard=true", ""); rec.Code != 404 {
+		t.Fatalf("delete missing = %d, want 404", rec.Code)
 	}
 }
 
