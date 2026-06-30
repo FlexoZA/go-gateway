@@ -8,6 +8,16 @@ export const SESSION_COOKIE = "dgw_admin_session";
 const ttlHours = Number(process.env.SESSION_TTL_HOURS || "12");
 export const sessionMaxAge = Math.max(1, ttlHours) * 3600; // seconds
 
+// "Remember me" sessions live much longer (default 30 days). The cookie and the
+// JWT expiry are kept in sync so a stolen cookie can't outlive its token.
+const rememberTtlHours = Number(process.env.SESSION_REMEMBER_TTL_HOURS || "720");
+export const rememberMaxAge = Math.max(1, rememberTtlHours) * 3600; // seconds
+
+// Cookie maxAge / TTL (seconds) for a session, depending on "remember me".
+export function maxAgeFor(remember: boolean): number {
+  return remember ? rememberMaxAge : sessionMaxAge;
+}
+
 // Whether the session cookie is marked Secure. Defaults to true in production,
 // but can be turned off (SESSION_COOKIE_SECURE=false) for a staging box served
 // over plain HTTP — browsers refuse to store Secure cookies over http on a real
@@ -27,11 +37,12 @@ function secret(): Uint8Array {
   return new TextEncoder().encode(s);
 }
 
-export async function createSession(email: string): Promise<string> {
+export async function createSession(email: string, remember = false): Promise<string> {
+  const hours = remember ? Math.max(1, rememberTtlHours) : Math.max(1, ttlHours);
   return new SignJWT({ email })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime(`${Math.max(1, ttlHours)}h`)
+    .setExpirationTime(`${hours}h`)
     .sign(secret());
 }
 

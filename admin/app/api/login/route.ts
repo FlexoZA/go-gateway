@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { gatewayConfigured, gatewayFetch } from "@/lib/gateway";
-import { SESSION_COOKIE, cookieSecure, createSession, sessionMaxAge } from "@/lib/session";
+import { SESSION_COOKIE, cookieSecure, createSession, maxAgeFor } from "@/lib/session";
 
 // POST /api/login — verify credentials against the gateway's user store, then
 // issue a signed session cookie. The gateway API key stays server-side.
@@ -11,10 +11,12 @@ export async function POST(req: NextRequest) {
 
   let email = "";
   let password = "";
+  let remember = false;
   try {
     const body = await req.json();
     email = String(body.email || "").trim();
     password = String(body.password || "");
+    remember = Boolean(body.remember);
   } catch {
     return NextResponse.json({ error: "invalid request" }, { status: 400 });
   }
@@ -36,14 +38,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
   }
 
-  const token = await createSession(email);
+  const token = await createSession(email, remember);
   const out = NextResponse.json({ ok: true, email });
   out.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: cookieSecure(),
     path: "/",
-    maxAge: sessionMaxAge,
+    maxAge: maxAgeFor(remember),
   });
   return out;
 }
