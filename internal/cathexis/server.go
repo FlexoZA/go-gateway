@@ -172,11 +172,15 @@ func (s *session) handleJSON(ctx context.Context, env envelope) error {
 	case "gps":
 		// GPS flows at 1Hz only while the unit is awake, so any GPS confirms online.
 		s.setLifecycle(ctx, "online")
-		p := s.buildTelemetry(env.Payload, false)
+		p, _ := s.buildTelemetry(env.Payload, false)
 		s.recordStatus(p)
 		s.conn.Emit(s.serial, deviceMake, s.model, "gps", p)
 	case "event":
-		p := s.buildTelemetry(env.Payload, true)
+		p, trace := s.buildTelemetry(env.Payload, true)
+		s.conn.Deps.Log.With("tcp/cathexis").Debug(map[string]any{
+			"event": "event_forward", "serial": s.serial,
+			"mapped_events": p["event"], "model": s.model, "mapping_trace": trace,
+		})
 		s.reconcileLifecycle(ctx, toString(env.Payload["name"]))
 		s.recordStatus(p)
 		s.conn.Emit(s.serial, deviceMake, s.model, "event", p)
@@ -496,8 +500,9 @@ func (s *session) recordStatus(p map[string]any) {
 // buildTelemetry normalizes a device GPS/event payload into the field names the
 // universal message builder understands: speed is converted m/s → km/h, numeric
 // fields are coerced, and events carry the mapped standard codes.
-func (s *session) buildTelemetry(raw map[string]any, isEvent bool) map[string]any {
+func (s *session) buildTelemetry(raw map[string]any, isEvent bool) (map[string]any, []mapTraceEntry) {
 	p := map[string]any{}
+	var trace []mapTraceEntry
 	for _, k := range []string{"latitude", "longitude", "altitude", "accuracy", "bearing", "satellites", "utc"} {
 		if v, ok := raw[k]; ok {
 			if f, ok := toFloat(v); ok {
@@ -514,9 +519,11 @@ func (s *session) buildTelemetry(raw map[string]any, isEvent bool) map[string]an
 		p["ignition"] = v
 	}
 	if isEvent {
-		p["event"] = toStandardEventCodes(raw, true)
+		var events []any
+		events, trace = toStandardEventCodesTrace(raw, true)
+		p["event"] = events
 	}
-	return p
+	return p, trace
 }
 
 func (s *session) serialOrUnknown() string {

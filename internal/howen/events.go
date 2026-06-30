@@ -358,17 +358,48 @@ func parseHowenMediaAlarmSubtype(detail map[string]any) (int, bool) {
 	return 0, false
 }
 
+// mapTraceSource classifies how one alarm resolved: it matched an editable
+// mapping row ("table"), a hardcoded protocol rule ("builtin"), or nothing —
+// it fell back to a generic event ("fallback"). The live mapping test mode
+// highlights "fallback" entries so an operator can see device codes that have
+// no mapping yet.
+const (
+	traceTable    = "table"
+	traceBuiltin  = "builtin"
+	traceFallback = "fallback"
+)
+
+// mapTraceEntry records how a single alarm was decoded against the mapping
+// tables, for the live mapping test mode. It is logged (debug) alongside
+// alarm_forward and never affects the universal message sent to sinks.
+type mapTraceEntry struct {
+	EC        int    `json:"ec"`                 // raw Howen event code
+	MapType   string `json:"map_type,omitempty"` // mapping table consulted ("" = builtin rule)
+	Code      int    `json:"code"`               // sub-field value looked up in that table (or the EC for builtins)
+	EventCode string `json:"event_code"`         // resolved standard code ("" when unmapped)
+	Source    string `json:"source"`             // traceTable | traceBuiltin | traceFallback
+}
+
 // mapHowenEventCodes ports howenCodec.js mapHowenEventCodes. `alarm` is the raw
 // alarm JSON object (used for the `et` end-time check). It reads the active mapping
 // set for the device's model (which may have been overridden from the database),
 // falling back to the unit default then the built-in defaults.
 func mapHowenEventCodes(model string, eventCode any, detail map[string]any, alarm map[string]any) []string {
+	events, _ := mapHowenEventCodesTrace(model, eventCode, detail, alarm)
+	return events
+}
+
+// mapHowenEventCodesTrace is mapHowenEventCodes plus a per-alarm decode trace.
+// The event list it returns is byte-for-byte identical to mapHowenEventCodes
+// (which is a thin wrapper); the trace is extra provenance for the test mode.
+func mapHowenEventCodesTrace(model string, eventCode any, detail map[string]any, alarm map[string]any) ([]string, []mapTraceEntry) {
 	code, ok := numberOrNullInt(eventCode)
 	if !ok {
-		return []string{"ALARM"}
+		return []string{"ALARM"}, []mapTraceEntry{{EventCode: "ALARM", Source: traceFallback}}
 	}
 	m := mappingsForModel(model)
 	events := []string{}
+	trace := []mapTraceEntry{}
 	add := func(e string) {
 		if e == "" {
 			return
@@ -379,6 +410,20 @@ func mapHowenEventCodes(model string, eventCode any, detail map[string]any, alar
 			}
 		}
 		events = append(events, e)
+	}
+	// rec resolves a table-driven branch: adds the event (if any) and records a
+	// trace entry tagged "table" on a hit or "fallback" on a miss.
+	rec := func(mapType string, sub int, event, source string) {
+		add(event)
+		trace = append(trace, mapTraceEntry{EC: code, MapType: mapType, Code: sub, EventCode: event, Source: source})
+	}
+	// builtin records a hardcoded (non-table) resolution keyed on the raw EC.
+	builtin := func(event string) {
+		if event == "" {
+			return
+		}
+		add(event)
+		trace = append(trace, mapTraceEntry{EC: code, Code: code, EventCode: event, Source: traceBuiltin})
 	}
 
 	hasEndTime := func() bool {
@@ -391,104 +436,107 @@ func mapHowenEventCodes(model string, eventCode any, detail map[string]any, alar
 
 	switch {
 	case code == 1:
-		add(mapHowenVideoLoss(detail))
+		builtin(mapHowenVideoLoss(detail))
 	case code == 4 || code == 5:
 		inputType, _ := numberOrNullInt(detailGet(detail, "num"))
 		if v, ok := m.Input[inputType]; ok {
-			add(v)
+			rec("input", inputType, v, traceTable)
 		} else {
-			add(m.EventCode[code])
+			rec("input", inputType, m.EventCode[code], traceFallback)
 		}
 	case code == 7 || code == 27 || code == 48:
 		if hasEndTime() {
-			add("SPEEDING:END")
+			builtin("SPEEDING:END")
 		} else {
-			add("SPEEDING:START")
+			builtin("SPEEDING:START")
 		}
 	case code == 11:
-		add("PARKING:START")
+		builtin("PARKING:START")
 	case code == 12:
 		direction, _ := numberOrNullInt(detailGet(detail, "dt"))
 		if v, ok := m.VibrationDirection[direction]; ok {
-			add(v)
+			rec("vibration_direction", direction, v, traceTable)
 		} else {
-			add("ALARM:VIBRATION")
+			rec("vibration_direction", direction, "ALARM:VIBRATION", traceFallback)
 		}
 	case code == 13:
 		// Geofence/electronic-fence crossing (spec §7), dispatched on the `st`
 		// sub-field. NOTE: this was previously (incorrectly) keyed on ec=15.
 		status, _ := numberOrNullInt(detailGet(detail, "st"))
 		if v, ok := m.GeofenceStatus[status]; ok {
-			add(v)
+			rec("geofence_status", status, v, traceTable)
 		} else {
-			add("ZONE:UNKNOWN_EVENT")
+			rec("geofence_status", status, "ZONE:UNKNOWN_EVENT", traceFallback)
 		}
 	case code == 15:
 		// Abnormal door open/close (spec §8): st 0=close, 1=open. (ec=15 is the
 		// door event in V4.0.0 — geofence moved to ec=13 above.)
 		if status, ok := numberOrNullInt(detailGet(detail, "st")); ok && status == 0 {
-			add("INPUT:DOOR_CLOSE")
+			builtin("INPUT:DOOR_CLOSE")
 		} else {
-			add("ALARM:DOOR_OPEN")
+			builtin("ALARM:DOOR_OPEN")
 		}
 	case code == 22:
 		// Swipe card (spec §13): tp 1=driver, 2=student, 3=invalid.
 		switch sw, _ := numberOrNullInt(detailGet(detail, "tp")); sw {
 		case 1:
-			add("CARD:DRIVER")
+			builtin("CARD:DRIVER")
 		case 2:
-			add("CARD:STUDENT")
+			builtin("CARD:STUDENT")
 		case 3:
-			add("CARD:INVALID")
+			builtin("CARD:INVALID")
 		default:
-			add("CARD:SWIPE")
+			builtin("CARD:SWIPE")
 		}
 	case code == 28:
 		voltageType, _ := numberOrNullInt(detailGet(detail, "dt", "DT", "Dt", "type", "num"))
 		if v, ok := m.Voltage[voltageType]; ok {
-			add(v)
+			rec("voltage", voltageType, v, traceTable)
 		} else {
-			add("ALARM")
+			rec("voltage", voltageType, "ALARM", traceFallback)
 		}
 	case code == 30:
 		aiType, _ := numberOrNullInt(detailGet(detail, "tp"))
 		if v, ok := m.DmsAdas[aiType]; ok {
-			add(v)
+			rec("dms_adas", aiType, v, traceTable)
 		} else {
-			add("ALARM")
+			rec("dms_adas", aiType, "ALARM", traceFallback)
 		}
 	case code == 32:
 		if hasEndTime() {
-			add("IDLING:END")
+			builtin("IDLING:END")
 		} else {
-			add("IDLING:START")
+			builtin("IDLING:START")
 		}
 	case code == 41:
-		add("TRIP:START")
+		builtin("TRIP:START")
 	case code == 43:
-		add("TRIP:END")
+		builtin("TRIP:END")
 	case code == 768:
-		add("TRIP:END")
+		builtin("TRIP:END")
 	case code == 1280 || code == 1281 || code == 1282:
 		if sub, ok := parseHowenMediaAlarmSubtype(detail); ok {
 			if v, ok := m.MediaAlarmSubtype[sub]; ok {
-				add(v)
+				rec("media_alarm_subtype", sub, v, traceTable)
 			} else {
-				add("ALARM")
+				rec("media_alarm_subtype", sub, "ALARM", traceFallback)
 			}
 		} else {
-			add("ALARM")
+			rec("media_alarm_subtype", -1, "ALARM", traceFallback)
 		}
 	default:
 		if v, ok := m.EventCode[code]; ok {
-			add(v)
+			rec("event_code", code, v, traceTable)
 		} else {
-			add("ALARM")
+			rec("event_code", code, "ALARM", traceFallback)
 		}
 	}
 
 	if len(events) == 0 {
-		return []string{"ALARM"}
+		events = []string{"ALARM"}
+		if len(trace) == 0 {
+			trace = []mapTraceEntry{{EC: code, Code: code, EventCode: "ALARM", Source: traceFallback}}
+		}
 	}
-	return events
+	return events, trace
 }

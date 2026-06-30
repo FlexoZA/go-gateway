@@ -16,6 +16,7 @@ export function Nav() {
     { href: "/devices", label: "Devices" },
     ...(caps?.has_clips !== false ? [{ href: "/clips", label: "Clips" }] : []),
     ...(caps?.has_mappings !== false ? [{ href: "/device-mapping", label: "Device Mapping" }] : []),
+    ...(caps?.has_mappings !== false ? [{ href: "/mapping-test", label: "Mapping Test" }] : []),
     { href: "/unit-settings", label: "Device Settings" },
     { href: "/server-settings", label: "Server Settings" },
     { href: "/users", label: "Users" },
