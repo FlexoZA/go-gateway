@@ -47,7 +47,7 @@ func New() *Protocol { return &Protocol{routes: newStreamRoutes()} }
 func (*Protocol) Name() string { return unitName }
 
 func (*Protocol) Capabilities() gateway.Capabilities {
-	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true}
+	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true, HasSnapshots: true}
 }
 
 // DefaultDevicePort is the JT808 control port the N62 dials (also where it sends
@@ -143,6 +143,11 @@ type session struct {
 	basicAt     time.Time
 	sdHealth    map[string]any
 	sdHealthAt  time.Time
+
+	// snapshot capture (0x8801 -> 0x0801 image upload, possibly subpackaged).
+	snapMu     sync.Mutex
+	snapReasm  *multimediaReasm
+	snapWaiter chan []byte
 }
 
 func (s *session) log() *logging.Logger { return s.conn.Deps.Log.With(logNS) }
@@ -212,7 +217,22 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 		s.handleTransparent(body)
 		s.ack(h)
 		return nil
-	case msgDriverCard, msgMultimediaEvent, msgMultimediaData, msgPassengerCount, msgFileUploadComplete:
+	case msgMultimediaData:
+		// Still-image upload (0x0801); reassemble + deliver/save, then ack.
+		s.handleMultimediaData(h, body)
+		s.ack(h)
+		return nil
+	case msgMultimediaEvent:
+		// Snapshot metadata (0x0800); log and ack (the image follows in 0x0801).
+		s.log().Debug(map[string]any{"event": "multimedia_event", "serial": s.serial, "len": len(body)})
+		s.ack(h)
+		return nil
+	case msgCameraShootResp:
+		// Camera-shoot command response (0x0805): lists the multimedia ids; log + ack.
+		s.log().Debug(map[string]any{"event": "camera_shoot_resp", "serial": s.serial, "len": len(body)})
+		s.ack(h)
+		return nil
+	case msgDriverCard, msgPassengerCount, msgFileUploadComplete:
 		// Acknowledge to stop the device's retry loop; payloads not yet parsed.
 		s.ack(h)
 		return nil

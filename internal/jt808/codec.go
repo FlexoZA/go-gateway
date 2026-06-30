@@ -41,6 +41,7 @@ const (
 	msgDriverCard         = 0x0702
 	msgMultimediaEvent    = 0x0800
 	msgMultimediaData     = 0x0801
+	msgCameraShootResp    = 0x0805
 	msgPassengerCount     = 0x0d03
 	msgFileUploadComplete = 0x1206
 	msgResourceList       = 0x1205
@@ -62,6 +63,7 @@ const (
 	msgPlaybackAV      = 0x9201 // playback request (recorded clip)
 	msgPlaybackControl = 0x9202 // playback control (stop)
 	msgResourceQuery   = 0x9205 // recording resource list query
+	msgCameraShoot     = 0x8801 // camera immediate shooting command
 )
 
 // General-response result codes (0x8001 byte 4 / 0x8100 byte 2).
@@ -129,6 +131,8 @@ type header struct {
 	Phone      string // decoded terminal-phone digits (leading zeros intact)
 	Serial     uint16 // terminal message serial
 	HeaderLen  int    // bytes consumed by the header (incl. subpackage info)
+	SubTotal   uint16 // subpackage: total packet count (0 when not subpackaged)
+	SubIndex   uint16 // subpackage: 1-based packet index
 }
 
 // parseHeader decodes the header from an unescaped, checksum-validated frame
@@ -164,7 +168,12 @@ func parseHeader(buf []byte) (header, []byte, error) {
 		h.HeaderLen = 12
 	}
 	if h.Subpackage {
-		h.HeaderLen += 4 // total-packets(2) + packet-index(2); not reassembled
+		// Subpackage info: total-packets(2) + 1-based packet-index(2).
+		if h.HeaderLen+4 <= len(buf) {
+			h.SubTotal = binary.BigEndian.Uint16(buf[h.HeaderLen : h.HeaderLen+2])
+			h.SubIndex = binary.BigEndian.Uint16(buf[h.HeaderLen+2 : h.HeaderLen+4])
+		}
+		h.HeaderLen += 4
 	}
 	if h.HeaderLen > len(buf) {
 		return header{}, nil, fmt.Errorf("jt808: header overruns frame")
@@ -369,6 +378,21 @@ func bcdTimeFromUTC(unix int64, offsetHours float64) []byte {
 		enc(t.Year() % 100), enc(int(t.Month())), enc(t.Day()),
 		enc(t.Hour()), enc(t.Minute()), enc(t.Second()),
 	}
+}
+
+// buildCameraShoot builds a 0x8801 camera-immediate-shooting body: capture
+// `count` still(s) on `channel` and upload them to the platform in realtime.
+// resolution 0 = use the device's configured resolution; quality is 1 (best)..10.
+func buildCameraShoot(channel, count, resolution, quality int) []byte {
+	body := make([]byte, 12)
+	body[0] = byte(channel)
+	binary.BigEndian.PutUint16(body[1:3], uint16(count)) // shooting command: n photos
+	binary.BigEndian.PutUint16(body[3:5], 0)             // interval (s)
+	body[5] = 0                                          // save flag: 0 = realtime upload
+	body[6] = byte(resolution)                           // resolution (0 = per config)
+	body[7] = byte(quality)                              // quality 1..10
+	// bytes 8..11 brightness/contrast/saturation/chroma left at 0 (device default).
+	return body
 }
 
 // encodeIP returns a 1-byte length prefix followed by the ASCII host/IP, as the
