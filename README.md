@@ -370,6 +370,9 @@ message golden parity test (`internal/core/message`).
   **Navtelecom** (NTCB/FLEX GPS, e.g. START S-2011 — GPS/IO telemetry; config &
   commands deferred, see [docs/navtelecom-integration-plan.md](docs/navtelecom-integration-plan.md)),
   and **JT808** (JT/T 808-2019 N62 dashcam on port 6608 — GPS + events + ULV
-  config + status; live video/clips/snapshots deferred to phase 2, see
+  config + status + commands, plus JT1078 live HLS video, recorded clips and a
+  recording file query on media port 6609, and an editable per-unit timezone
+  setting; on-demand snapshots are wired but off, as the N62 firmware ignores the
+  capture command — see
   [docs/jt808-integration-plan.md](docs/jt808-integration-plan.md)) are wired into
   the multi-unit gateway.
