@@ -42,9 +42,18 @@ export function statusTone(status: string): "green" | "amber" | "rose" | "slate"
   }
 }
 
-export function ErrorBanner({ message }: { message?: string | null }) {
+export function ErrorBanner({ message, onDismiss }: { message?: string | null; onDismiss?: () => void }) {
   if (!message) return null;
-  return <div className="mb-4 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{message}</div>;
+  return (
+    <div className="mb-4 flex items-start gap-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+      <span className="grow">{message}</span>
+      {onDismiss && (
+        <button onClick={onDismiss} aria-label="Dismiss" className="shrink-0 text-rose-300/80 hover:text-rose-100">
+          ✕
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function Empty({ children }: { children: ReactNode }) {

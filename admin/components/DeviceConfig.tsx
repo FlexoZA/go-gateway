@@ -153,8 +153,9 @@ export function DeviceConfig({ serial, unit }: { serial: string; unit: string })
 
       {error && (
         <div className="flex flex-wrap items-center gap-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
-          <span>{error}</span>
+          <span className="grow">{error}</span>
           {sleeping && <button className="btn-primary" onClick={wake} disabled={waking}>{waking ? "Waking…" : "Wake device"}</button>}
+          <button onClick={() => setError(null)} aria-label="Dismiss" className="shrink-0 text-rose-300/80 hover:text-rose-100">✕</button>
         </div>
       )}
       {notice && <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{notice}</div>}

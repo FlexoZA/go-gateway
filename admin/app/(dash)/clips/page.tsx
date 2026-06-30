@@ -190,7 +190,7 @@ export default function ClipsPage() {
   return (
     <div>
       <PageHeader title="Clips" subtitle="Find footage on a device's SD card and store it on the server" />
-      <ErrorBanner message={error || units.error || clips.error} />
+      <ErrorBanner message={error || units.error || clips.error} onDismiss={error ? () => setError(null) : undefined} />
       {notice && <div className="mb-4 rounded-md border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200">{notice}</div>}
       {sleeping && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
