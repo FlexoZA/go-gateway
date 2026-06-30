@@ -101,6 +101,19 @@ func (s *Store) RevokeAPIKey(ctx context.Context, prefix string) (int64, error) 
 	return tag.RowsAffected(), nil
 }
 
+// DeleteAPIKey permanently removes a revoked (inactive) key by display prefix.
+// Active keys are left untouched — they must be revoked first — so a single
+// errant call can't silently cut off a live integration. Returns the number
+// deleted.
+func (s *Store) DeleteAPIKey(ctx context.Context, prefix string) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM api_keys WHERE prefix = $1 AND NOT is_active`, prefix)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ListAPIKeyMeta returns non-secret key metadata as JSON-ready maps (for the
 // admin API). It never includes the key or its hash.
 func (s *Store) ListAPIKeyMeta(ctx context.Context) ([]map[string]any, error) {

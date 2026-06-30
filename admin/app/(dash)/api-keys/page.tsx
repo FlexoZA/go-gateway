@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useConfirm } from "@/components/confirm";
 import { api } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { useFetch } from "@/lib/useFetch";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 
@@ -42,6 +43,16 @@ export default function APIKeysPage() {
       await refresh();
     } catch (e: any) {
       setActionError(e.message || "Revoke failed");
+    }
+  }
+
+  async function del(prefix: string) {
+    setActionError(null);
+    try {
+      await api(`api-keys/${encodeURIComponent(prefix)}?hard=true`, { method: "DELETE" });
+      await refresh();
+    } catch (e: any) {
+      setActionError(e.message || "Delete failed");
     }
   }
 
@@ -99,7 +110,21 @@ export default function APIKeysPage() {
                             Revoke
                           </button>
                         ) : (
-                          <span className="text-xs text-slate-500">revoked</span>
+                          <button
+                            className="btn-ghost"
+                            onClick={async () => {
+                              if (
+                                await confirm({
+                                  title: "Delete API key?",
+                                  body: `“${k.name || k.prefix}” is already revoked. Deleting removes it from the list permanently. This cannot be undone.`,
+                                  confirmLabel: "Delete",
+                                })
+                              )
+                                del(k.prefix);
+                            }}
+                          >
+                            Delete
+                          </button>
                         )}
                       </div>
                     </td>
@@ -116,6 +141,7 @@ export default function APIKeysPage() {
 
 function NewKeyBanner({ value, onDismiss }: { value: string; onDismiss: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   return (
     <div className="card border-emerald-500/40 bg-emerald-500/10">
       <div className="flex items-start justify-between gap-4">
@@ -132,16 +158,17 @@ function NewKeyBanner({ value, onDismiss }: { value: string; onDismiss: () => vo
           <button
             className="btn-primary"
             onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(value);
+              const ok = await copyText(value);
+              if (ok) {
                 setCopied(true);
                 setTimeout(() => setCopied(false), 1500);
-              } catch {
-                /* clipboard may be unavailable; user can select manually */
+              } else {
+                setCopyFailed(true);
+                setTimeout(() => setCopyFailed(false), 2500);
               }
             }}
           >
-            {copied ? "Copied" : "Copy"}
+            {copied ? "Copied" : copyFailed ? "Press Ctrl+C" : "Copy"}
           </button>
           <button className="btn-ghost" onClick={onDismiss}>
             Dismiss
