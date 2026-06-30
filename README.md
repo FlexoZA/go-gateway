@@ -184,7 +184,7 @@ node tools/gen-webhook-golden.mjs /path/to/dfm-mvr-gateway
 ## Architecture
 
 ```
-cmd/gateway/main.go            multi-unit entrypoint: app.Run(howen, fleetiger, cathexis, navtelecom)
+cmd/gateway/main.go            multi-unit entrypoint: app.Run(howen, fleetiger, cathexis, navtelecom, jt808)
 cmd/howen/main.go              lean single-unit entrypoint: app.Run(howen.New())
 internal/
   core/                        protocol-agnostic framework
@@ -366,7 +366,10 @@ message golden parity test (`internal/core/message`).
   (read/write all parameter segments) from the admin panel. Datahub/OBD frames
   (ec 771) are forwarded as `gps` telemetry with CAN/OBD values in `sensors`.
 - **Milestone 3 (in progress):** additional unit types via the scaffold —
-  **Fleetiger** (GT06-style GPS), **Cathexis** (MVR video + config), and
+  **Fleetiger** (GT06-style GPS), **Cathexis** (MVR video + config),
   **Navtelecom** (NTCB/FLEX GPS, e.g. START S-2011 — GPS/IO telemetry; config &
-  commands deferred, see [docs/navtelecom-integration-plan.md](docs/navtelecom-integration-plan.md))
-  are wired into the multi-unit gateway.
+  commands deferred, see [docs/navtelecom-integration-plan.md](docs/navtelecom-integration-plan.md)),
+  and **JT808** (JT/T 808-2019 N62 dashcam on port 6608 — GPS + events + ULV
+  config + status; live video/clips/snapshots deferred to phase 2, see
+  [docs/jt808-integration-plan.md](docs/jt808-integration-plan.md)) are wired into
+  the multi-unit gateway.

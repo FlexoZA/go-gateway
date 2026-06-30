@@ -38,6 +38,7 @@ services:
       - HOWEN_PORT=${HOWEN_PORT:-33000}
       - FLEETIGER_PORT=${FLEETIGER_PORT:-8050}
       - NAVTELECOM_PORT=${NAVTELECOM_PORT:-4000}
+      - JT808_PORT=${JT808_PORT:-6608}
       # Cathexis control port (the device dials it). Media is served on the next
       # two ports (32325 + 32326) — the old gateway's clip-receiver / live-stream
       # split, handled here by one media listener. See the ports mapping below.
@@ -71,6 +72,8 @@ services:
       - "33001:33001"  # howen media
       - "8050:8050"    # fleetiger
       - "4000:4000"    # navtelecom
+      - "6608:6608"    # jt808 control
+      - "6609:6609"    # jt808 media (JT1078 video stream)
       - "${LISTEN_PORT:-32324}:${LISTEN_PORT:-32324}"                # cathexis control
       - "${VIDEO_LISTEN_PORT:-32325}:${VIDEO_LISTEN_PORT:-32325}"    # cathexis media (clips)
       - "${STREAM_LISTEN_PORT:-32326}:${STREAM_LISTEN_PORT:-32326}"  # cathexis media (live stream)

@@ -51,6 +51,8 @@ case "$UNIT" in
   howen)    DEFAULT_DEVICE_PORT=33000 ;;
   fleetiger) DEFAULT_DEVICE_PORT=8050 ;;
   cathexis) DEFAULT_DEVICE_PORT=33010 ;;
+  navtelecom) DEFAULT_DEVICE_PORT=4000 ;;
+  jt808)    DEFAULT_DEVICE_PORT=6608 ;;
   *)        DEFAULT_DEVICE_PORT=33000 ;;
 esac
 

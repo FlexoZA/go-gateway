@@ -157,6 +157,11 @@ func (a *App) newUnitRuntime(proto gateway.Protocol, baseDeps gateway.Deps) *uni
 	u.deps.Config = a.cfg
 	u.deps.Config.ListenPort = u.port
 
+	// The device local-clock offset is useful to any unit that decodes
+	// device-local timestamps (e.g. jt808 location times), not just video units
+	// localizing clip windows — so wire it for every unit.
+	u.deps.DeviceTZOffsetHours = a.cfg.DeviceTZOffsetHours
+
 	// Live video (HLS): only for a unit that runs a device-side media listener AND
 	// when video is enabled (a media advertise host is configured). Today only the
 	// howen unit qualifies; a GPS-only unit's deps.Media stays nil.
@@ -173,7 +178,6 @@ func (a *App) newUnitRuntime(proto gateway.Protocol, baseDeps gateway.Deps) *uni
 		u.snaps = media.NewSnapshotFetch()
 		u.deps.Snapshots = u.snaps
 		u.deps.MediaAdvertiseHost = net.JoinHostPort(a.cfg.MediaAdvertiseHost, strconv.Itoa(u.mediaPort))
-		u.deps.DeviceTZOffsetHours = a.cfg.DeviceTZOffsetHours
 		if a.store != nil {
 			u.clips = media.NewClipRegistry(u.media, a.store, a.cfg.ClipsRoot, a.log)
 			u.deps.Clips = u.clips

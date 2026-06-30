@@ -13,6 +13,7 @@ import (
 	"github.com/dfm/device-gateway/internal/core/app"
 	"github.com/dfm/device-gateway/internal/fleetiger"
 	"github.com/dfm/device-gateway/internal/howen"
+	"github.com/dfm/device-gateway/internal/jt808"
 	"github.com/dfm/device-gateway/internal/navtelecom"
 )
 
@@ -22,5 +23,6 @@ func main() {
 		fleetiger.New(),
 		cathexis.New(),
 		navtelecom.New(),
+		jt808.New(),
 	)
 }
