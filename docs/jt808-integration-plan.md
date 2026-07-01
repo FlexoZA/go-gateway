@@ -184,4 +184,34 @@ config to the lab host on 6608 and approved in the admin (lab runs
 - **Unit config. ✅ DONE.** (`feature/jt808-unit-config`.) Editable per-unit
   `timezone_offset` (`ConfigurableUnit`); set to `2` for the SAST N62 and
   validated live.
+- **Full config screen + Mapping Test. ✅ DONE.** (`feature/n62-config-screen`,
+  `feature/n62-config-full`, `feature/n62-ulv-reassembly`, `feature/jt808-mapping-trace`,
+  merged into `main`.) The Config tab has a bespoke N62 editor
+  (`admin/components/N62Config.tsx` + `admin/lib/n62Config.ts`, selected by
+  `deviceConfigKind("jt808")`) over the ULV `0xB050/0xB051` channel — 8 categories:
+  General, Vehicle, Display, Recording, Alarm, AI (ADAS/DMS), Network, Peripheral.
+  `ulvParamTypes` (`config.go`) is the verified ParamType set. Three write shapes:
+  - **scalar** segments merge partial field Sets (send only changed fields);
+  - **nested** segments (`NetCms.Server_xx`, `RecStream_M/S`/`RecCamAttr.Chn_xx`) are
+    sent WHOLE — the firmware does not merge partial sub-objects;
+  - **alarm/ADAS/DMS "list"** segments (`AlmSpd/Gsn/Driving/Sys/IoIn`, `AiAdas/AiDms`)
+    send the whole segment with the `LnkParam` linkage string preserved verbatim and
+    the CSV `Param` tuning knobs split into editable fields.
+  Live-verified write-type quirk: some alarm `En` fields are JSON booleans, others 0/1
+  — the editor echoes the original type. Firmware silently clamps out-of-range values;
+  the PUT re-reads and returns device truth.
+  - **Firmware limit — 8 ParamTypes unsupported over ULV.** `PreDisplay/PreOsd/PreMargin`,
+    `RecCamAttr/RecCapAttr/RecStorage`, `AlmDriving`, `AlmSys` answer a ULV Get with an
+    *empty* `0xB051` body (single non-subpackaged frame, `jsonLen=0`; confirmed by
+    frame diag). They read fine over the unit's local HTTP UI but not the CMS link, so
+    the editor shows a "no data" card. `RequestConfig` retries garbled/empty reads
+    (`ulvGetAttempts`).
+  - **Subpackage reassembly.** `server.go` reassembles genuinely subpackaged response
+    frames (`reassemble`, mirrors the `0x0801` image path) before dispatch — a latent
+    bug for large replies. The 8 empty-body segments above are NOT subpackaged, so this
+    doesn't recover them.
+  - **Mapping Test.** `handleLocation` emits `event_forward` with a `mapping_trace`
+    (`resolveEventsTrace`) whenever a raw alarm signal is present, so the N62 renders in
+    the live Mapping Test (mapped codes green, unmapped amber → add on Device Mapping).
+    Idle ADAS/DMS status TLVs (subtype 0) are skipped to avoid noise.
 

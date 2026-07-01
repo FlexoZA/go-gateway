@@ -167,6 +167,37 @@ the panel) include `WIFI DIALUP SERVER ROAMING CLOCK DST POWER RECORD DISPLAY OS
 MASK Privacy IOSET SPEED GSENSOR MOTIONDETECT ACC VOLTAGE PTZ LANGUAGE JTBASE
 UPGRADE VERSIONINFO`.
 
+### Segment names & shapes are per unit type
+
+The `GET/PUT …/config` routes are shared, but the `modules` (segment) names and
+value shapes depend on the unit's protocol. The section above is **Howen** (all
+string values, H-Protocol `0x40A0/0x10A0`).
+
+**JT808 / N62** uses ULV param config (`0xB050` Get / `0xB051` resp) — the segment
+names are ULV *ParamTypes* and values are **typed** (numbers/enums, nested objects),
+not all-string:
+
+```
+# read
+GET /api/units/JT808_100000000327/config?modules=GenDevInfo,NetCms,AiAdas
+# write — send only changed fields for scalar segments…
+PUT … { "sc": { "GenDevInfo": { "DevName": "Truck 12" } } }
+# …but the WHOLE segment for nested ones (firmware doesn't merge sub-objects):
+PUT … { "sc": { "RecStream_M": { "Chn_00": {...}, "Chn_01": {...}, … } } }
+```
+
+Common ParamTypes: `GenDevInfo GenDateTime GenDst GenUser · VehBaseInfo VehPosition
+VehMileage · RecAttr RecStream_M RecStream_S RecOsd · AlmSpd AlmGsn AlmIoIn ·
+AiBase AiAdas AiDms AiFace · NetCms NetWifi NetXg NetWired NetFtp NetUpload ·
+PerIoOutput`. Alarm/ADAS/DMS segments carry a `LnkParam` linkage string that must be
+sent back verbatim; ADAS/DMS pack tuning knobs into a CSV `Param`.
+
+**Known firmware gap (current N62):** eight ParamTypes answer a ULV Get with an
+empty body and so are **not editable over the gateway** (only on the unit's own
+screen): `PreDisplay PreOsd PreMargin · RecCamAttr RecCapAttr RecStorage ·
+AlmDriving AlmSys`. A single-module read of one returns `502 device returned no
+configuration`; in the panel they show a "no data" card.
+
 ## Video, recordings, clips & snapshots
 
 Live video is HLS produced by ffmpeg; clips are `.mp4` files pulled from the

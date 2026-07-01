@@ -49,6 +49,7 @@ initialized it returns `409` and the panel routes to normal login.
 | Device detail | `/devices/{serial}` | **Status tab:** `GET /api/units/{serial}/status` (live 4G/network, module health, storage, IO, GPS). **Config tab:** `GET/PUT /api/units/{serial}/config` (full device-settings editor, below). `POST …/commands` `wake_device` when the unit is in standby |
 | Clips | `/clips` | `GET /api/units/{serial}/recordings` (search footage), `POST /api/units/{serial}/clips` (pull a clip or trimmed section), `GET /api/clips`, `GET /api/clips/{id}`, `/download`, `DELETE /api/clips/{id}`. Live preview uses `POST /api/units/{serial}/stream/start`+`stop` and the `/api/hls/` playlist |
 | Device Mapping | `/device-mapping` | `GET/PUT/DELETE /api/mappings`, `GET /api/mappings/models`, `POST /api/mappings/copy`, and `GET/POST /api/event-codes` (the event-code picklist) |
+| Mapping Test | `/mapping-test` | `GET/PUT /api/logs/level` (forces `debug` while testing), `GET /api/logs/live` (polls the chosen serial). Live tester: trigger events on a connected unit and watch each raw code resolve through the mapping tables |
 | Device Settings | `/unit-settings` | `GET /api/unit-types/{unit}/settings/schema`, `GET/PUT /api/unit-types/{unit}/settings`, `GET/PUT /api/unit-types/{unit}/ports`, `PUT /api/unit-types/{unit}/capabilities` |
 | Server Settings | `/server-settings` | **Gateway identity / device port / device authorization:** `GET/PUT /api/settings` (`gateway_name` & `device_reject_unknown` live, `device_port` restart-applied). **Webhooks:** `GET/POST /api/webhooks`, `PUT/DELETE /api/webhooks/{id}` (GPS/event sinks; multiple, each enable/disable) |
 | Users | `/users` | `GET/POST /api/users`, `PUT/DELETE /api/users/{id}` (create accounts, enable/disable, reset password, delete) |
@@ -73,23 +74,41 @@ and `POST /api/mappings/copy` clones one model's rows onto another. The
 `GET/POST /api/event-codes` picklist supplies (and extends) the available event
 names. Edits apply to the running gateway within milliseconds via NOTIFY.
 
+**Mapping Test** (`/mapping-test`) is a live tester: pick a connected unit, trigger
+events on it, and watch each raw device code resolve through the mapping tables in
+real time (mapped codes green, unmapped flagged amber so you can add them). It forces
+the gateway capture level to `debug`, then reads the per-event decode `mapping_trace`
+from the `alarm_forward`/`event_forward` logs. Works for any unit type that reports
+`has_mappings` — Howen, Cathexis, and the JT808/N62 (alarm bits + ADAS/DMS/BSD/vendor
+TLVs; idle status TLVs are ignored).
+
 ### Device detail & config editor
 
-Clicking a device opens its detail page with two tabs:
+Clicking a device opens its detail page. It always has a **Status** tab; a
+**Config** tab appears when the unit type supports parameter config, and
+**Video** / **Snapshots** tabs when it supports video.
 
 - **Status** — a live read-out of the unit (`GET …/status`): connection/server,
   mobile network/4G signal, module health, SD storage, vehicle IO, GPS/location.
-- **Config** — a full settings editor (`GET/PUT …/config`) grouped into the
-  device's own menu categories (Network, Time, Power, Recording, Alarms, PTZ,
-  System). Common segments (Wi-Fi, mobile, server, clock, power, …) get curated
-  friendly labels and controls; the technical long-tail renders generically from
-  the device's own field names. **Save writes only the fields you changed** — the
-  firmware returns garbage in untouched string fields, so the editor deep-diffs
-  and sends just the changed leaves (never a read-modify-write). Risky segments
-  (Server, Power) confirm before saving; firmware/identity fields are read-only.
-  The UI metadata lives in `admin/lib/howenConfig.ts`; add labels/enums there
-  without touching the gateway. The unit must be **awake** to read/write — a
-  standby device shows a **Wake** button.
+- **Config** — a settings editor (`GET/PUT …/config`) grouped into the device's own
+  menu categories. Which editor renders is chosen per unit type (`deviceConfigKind`):
+  - **Howen** — generic, all-string segments (Network, Time, Power, Recording,
+    Alarms, PTZ, System). Common segments get curated friendly labels; the technical
+    long-tail renders generically from the device's field names. UI metadata lives in
+    `admin/lib/howenConfig.ts`.
+  - **Cathexis** — bespoke type-aware editor (`CathexisConfig` + `cathexisConfig.ts`).
+  - **JT808 / N62** — bespoke typed editor (`N62Config` + `n62Config.ts`) over the ULV
+    param channel: 8 categories (General, Vehicle, Display, Recording, Alarm, AI
+    ADAS/DMS, Network, Peripheral). ADAS/DMS expose per-alarm tuning with the device's
+    linkage string preserved. A few sections are firmware-limited on the current N62
+    (read only on the unit's own screen) and show a "no data" card.
+
+  **Save writes only the fields you changed** for scalar segments (some firmware
+  returns garbage in untouched fields, so the editor deep-diffs); nested segments
+  (per-channel streams, servers) are sent whole where the firmware won't merge
+  sub-objects. Risky segments (Server/CMS, Power, network) confirm before saving;
+  firmware/identity fields are read-only. Add labels/enums in the unit's metadata file
+  without touching the gateway. The unit must be **awake/connected** to read/write.
 
 ## Configuration
 
