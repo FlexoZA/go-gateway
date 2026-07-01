@@ -141,7 +141,15 @@ func (*Protocol) ReadFrame(r *bufio.Reader) (gateway.Frame, error) {
 }
 
 func (p *Protocol) NewSession(c *gateway.Conn) gateway.Session {
-	return &session{conn: c, routes: p.routes, pending: map[int]chan map[string]any{}}
+	return &session{conn: c, routes: p.routes, pending: map[int]chan map[string]any{}, frameReasm: map[uint16]*frameReasm{}}
+}
+
+// frameReasm accumulates the body fragments of a subpackaged JT808 message (one 0x7E
+// frame per package, sharing a MsgID with per-frame SubTotal/SubIndex) until every
+// package has arrived.
+type frameReasm struct {
+	total uint16
+	parts map[uint16][]byte
 }
 
 type session struct {
@@ -175,6 +183,34 @@ type session struct {
 	snapMu     sync.Mutex
 	snapReasm  *multimediaReasm
 	snapWaiter chan []byte
+
+	// frameReasm reassembles subpackaged non-multimedia messages (e.g. a large ULV
+	// 0xB051 config reply the N62 splits across frames), keyed by MsgID.
+	frameReasmMu sync.Mutex
+	frameReasm   map[uint16]*frameReasm
+}
+
+// reassemble buffers one subpackaged body fragment and returns the concatenated body
+// once all packages (1..total) have arrived. Fragments of different messages are kept
+// apart by MsgID; a change in the advertised total resets the buffer.
+func (s *session) reassemble(h header, body []byte) ([]byte, bool) {
+	s.frameReasmMu.Lock()
+	defer s.frameReasmMu.Unlock()
+	b := s.frameReasm[h.MsgID]
+	if b == nil || b.total != h.SubTotal {
+		b = &frameReasm{total: h.SubTotal, parts: map[uint16][]byte{}}
+		s.frameReasm[h.MsgID] = b
+	}
+	b.parts[h.SubIndex] = append([]byte(nil), body...)
+	if len(b.parts) < int(b.total) {
+		return nil, false
+	}
+	full := make([]byte, 0, len(body)*int(b.total))
+	for i := uint16(1); i <= b.total; i++ {
+		full = append(full, b.parts[i]...)
+	}
+	delete(s.frameReasm, h.MsgID)
+	return full, true
 }
 
 func (s *session) log() *logging.Logger { return s.conn.Deps.Log.With(logNS) }
@@ -204,6 +240,18 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 	if err != nil {
 		s.log().Debug(map[string]any{"event": "bad_frame", "error": err.Error()})
 		return nil
+	}
+	// Reassemble subpackaged messages before dispatch. The N62 splits some larger
+	// replies (e.g. certain ULV 0xB051 config segments) across frames; without this
+	// only the first fragment's body reaches the handler and the JSON fails to parse.
+	// 0x0801 image uploads carry their own reassembler, so leave those to it.
+	if h.Subpackage && h.SubTotal > 1 && h.MsgID != msgMultimediaData {
+		full, complete := s.reassemble(h, body)
+		if !complete {
+			s.ack(h)
+			return nil
+		}
+		body = full
 	}
 	switch h.MsgID {
 	case msgRegister:
