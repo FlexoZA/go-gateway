@@ -35,6 +35,12 @@ var ulvParamTypes = []string{
 // perParamTimeout bounds one ULV Get/Set round-trip.
 const perParamTimeout = 8 * time.Second
 
+// ulvGetAttempts is how many times a Get is tried before giving up on a segment.
+// The N62 intermittently answers a ParamType Get with an empty/garbled body (which
+// parses to a {"raw_text"} object with no ParamType); it returns immediately, so a
+// couple of quick retries recover the read without meaningfully adding latency.
+const ulvGetAttempts = 3
+
 // buildUlvParam frames a 0xB050 with a JSON body: type DWORD (0) + JSON length
 // DWORD + JSON bytes.
 func (s *session) buildUlvParam(obj map[string]any) []byte {
@@ -77,13 +83,34 @@ func (s *session) RequestConfig(ctx context.Context, modules []string) (map[stri
 	}
 	out := map[string]any{}
 	for _, pt := range wanted {
-		rctx, cancel := context.WithTimeout(ctx, perParamTimeout)
-		frame := s.buildUlvParam(map[string]any{"CmdType": "Get", "ParamType": pt})
-		resp, err := s.request(rctx, msgUlvParamResp, frame)
-		cancel()
-		if err != nil {
-			s.log().Debug(map[string]any{"event": "config_get_failed", "serial": s.serial, "param_type": pt, "error": err.Error()})
-			continue // skip a segment the device didn't answer; return the rest
+		var resp map[string]any
+		var lastErr error
+		for attempt := 0; attempt < ulvGetAttempts; attempt++ {
+			rctx, cancel := context.WithTimeout(ctx, perParamTimeout)
+			frame := s.buildUlvParam(map[string]any{"CmdType": "Get", "ParamType": pt})
+			r, err := s.request(rctx, msgUlvParamResp, frame)
+			cancel()
+			if err != nil {
+				lastErr = err
+				if ctx.Err() != nil {
+					break // caller/context deadline hit — stop retrying
+				}
+				continue
+			}
+			// A well-formed reply echoes ParamType; an empty/garbled body parses to
+			// {"raw_text"} with none, so treat that as a miss and retry.
+			if _, ok := r["ParamType"]; ok {
+				resp = r
+				lastErr = nil
+				break
+			}
+			lastErr = fmt.Errorf("garbled reply")
+		}
+		if resp == nil {
+			if lastErr != nil {
+				s.log().Debug(map[string]any{"event": "config_get_failed", "serial": s.serial, "param_type": pt, "error": lastErr.Error()})
+			}
+			continue // skip a segment the device didn't answer cleanly; return the rest
 		}
 		key := toStr(resp["ParamType"])
 		if key == "" {
