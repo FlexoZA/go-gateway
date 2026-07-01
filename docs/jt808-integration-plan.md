@@ -214,4 +214,20 @@ config to the lab host on 6608 and approved in the admin (lab runs
     (`resolveEventsTrace`) whenever a raw alarm signal is present, so the N62 renders in
     the live Mapping Test (mapped codes green, unmapped amber → add on Device Mapping).
     Idle ADAS/DMS status TLVs (subtype 0) are skipped to avoid noise.
+- **Make/model as unit type. ✅ DONE.** (`feature/dfm-n62-unit-type`.) `jt808` is a
+  *protocol/codec*, not a unit — different vendors/makes/models run as **separate unit
+  types on separate ports**, sharing the JT808 codec. `jt808.New(Config{...})` is now
+  config-driven (unit name, model, make, control/media port, `HasSnapshots`), and the
+  per-model mapping state moved from a package global onto the `Protocol` instance so
+  co-hosted JT808 units don't clobber each other. The N62 registers via the `jt808.N62()`
+  preset as unit **`dfm-n62`** (the unbranded N62 group — add more no-vendor N62-class
+  devices here) on ports 6608/6609; add a new vendor with another `jt808.New(...)` line
+  and a distinct port. The universal-message `make` stays `jt808_19` (message-builder
+  keeps the historical device type; golden test unaffected) and the serial prefix stays
+  `JT808_`. A one-time idempotent DB migration in `store.go` renames the old `jt808`
+  rows → `dfm-n62` (device registry, event_mappings, unit_settings, `device_port:`/`cap_`
+  settings keys), preserving the approved device, its timezone offset, and any custom
+  mappings. Admin: `deviceConfigKind("dfm-n62")`. `/unit-settings` → `/device-settings`
+  (redirect kept). Adding a second make/model would also want per-model **capabilities**
+  (today per-protocol) — the next incremental seam, since mappings are already per-model.
 

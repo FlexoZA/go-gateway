@@ -78,7 +78,7 @@ func (r *streamRoutes) clearPlayback(serial string, channel int) {
 // NewMediaServer implements gateway.MediaServerProvider: the app runner calls it
 // (only when video is enabled) to build the device-side JT1078 media listener.
 func (p *Protocol) NewMediaServer(addr string, mgr *media.Manager, clips *media.ClipRegistry, snaps *media.SnapshotFetch, log *logging.Logger) gateway.MediaListener {
-	return &mediaServer{addr: addr, mgr: mgr, clips: clips, routes: p.routes, log: log.With(logNS + "-media")}
+	return &mediaServer{addr: addr, mgr: mgr, clips: clips, routes: p.routes, log: log.With(p.logNS() + "-media")}
 }
 
 // mediaServer accepts the JT1078 stream connections the N62 opens after a

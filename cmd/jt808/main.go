@@ -11,4 +11,4 @@ import (
 	"github.com/dfm/device-gateway/internal/jt808"
 )
 
-func main() { app.Run(jt808.New()) }
+func main() { app.Run(jt808.New(jt808.N62())) }

@@ -147,7 +147,7 @@ func TestParseLocation(t *testing.T) {
 	if loc.TimeUTC != when.Unix() {
 		t.Fatalf("time = %v, want %v", loc.TimeUTC, when.Unix())
 	}
-	p, isEvent := buildLocationPayload(loc, deviceModel)
+	p, isEvent := testProto.buildLocationPayload(loc, deviceModel)
 	if isEvent {
 		t.Fatal("plain location should not be an event")
 	}

@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dfm/device-gateway/internal/core/device"
@@ -26,54 +27,83 @@ import (
 )
 
 const (
-	unitName    = "jt808"    // registry protocol + log namespace
-	deviceMake  = "jt808_19" // universal-message make (matches the builder's jt808Switch)
-	deviceModel = "N62"
-
-	defaultControlPort = 6608
-	defaultMediaPort   = 6609
-	idleTimeout        = 6 * time.Minute
-
-	logNS = "tcp/jt808"
+	// protocolMake is the universal-message make for every JT808 device, kept
+	// "jt808_19" so the message-builder's jt808Switch emits the historical device
+	// type regardless of which make/model unit hosts it.
+	protocolMake = "jt808_19"
+	idleTimeout  = 6 * time.Minute
 )
 
-// Protocol is the JT808 unit-type plugin. routes is shared between control
+// Config describes one concrete JT808 unit type (a make/model, or a group of
+// unbranded models) hosted on the shared JT808 codec. Different vendors/models are
+// registered as SEPARATE units — each on its own control/media port — so their
+// settings, capabilities, ports and event-mapping tables are independent. Register
+// more with another jt808.New(Config{...}) line in cmd/gateway.
+type Config struct {
+	Unit         string // registry protocol + log namespace + DB key, e.g. "dfm-n62"
+	Model        string // universal-message model, e.g. "N62"
+	Make         string // universal-message make; defaults to "jt808_19"
+	ControlPort  int    // JT808 control listener
+	MediaPort    int    // JT1078 media listener
+	HasSnapshots bool   // N62 firmware ignores 0x8801; a model that honours it sets true
+}
+
+// N62 is the preset for the unbranded "DFM" N62-class dashcam group (any no-vendor
+// N62-class device), on the historical JT808 ports.
+func N62() Config {
+	return Config{Unit: "dfm-n62", Model: "N62", Make: protocolMake, ControlPort: 6608, MediaPort: 6609}
+}
+
+// Protocol is a JT808 unit-type plugin instance. routes is shared between control
 // sessions (which start streams/clips) and the media listener (which routes the
-// device's JT1078 connections); see media.go.
+// device's JT1078 connections; see media.go). mappings holds THIS unit's active
+// per-model event-mapping tables — per-instance so multiple JT808 units hosted in
+// one process don't share/clobber mapping state.
 type Protocol struct {
-	routes *streamRoutes
+	cfg      Config
+	routes   *streamRoutes
+	mappings atomic.Pointer[map[string]*Mappings]
 }
 
-// New returns a JT808 protocol plugin.
-func New() *Protocol { return &Protocol{routes: newStreamRoutes()} }
+// New returns a JT808 unit-type plugin for the given make/model config.
+func New(cfg Config) *Protocol {
+	if cfg.Make == "" {
+		cfg.Make = protocolMake
+	}
+	p := &Protocol{cfg: cfg, routes: newStreamRoutes()}
+	m := map[string]*Mappings{"": defaultMappings()}
+	p.mappings.Store(&m)
+	return p
+}
 
-func (*Protocol) Name() string { return unitName }
+func (p *Protocol) Name() string  { return p.cfg.Unit }
+func (p *Protocol) logNS() string { return "tcp/" + p.cfg.Unit }
 
-func (*Protocol) Capabilities() gateway.Capabilities {
-	// HasSnapshots is false: the validated N62 firmware ignores the on-demand
+func (p *Protocol) Capabilities() gateway.Capabilities {
+	// HasSnapshots is per-model: the validated N62 firmware ignores the on-demand
 	// camera-shoot command (0x8801) — it sends no response at all — so the capture
-	// UI would always fail. The Snapshotter methods and the auto-push 0x0801
-	// handler remain (stills the device pushes on events/interval are still
-	// reassembled and saved); flip this to true for firmware that supports 0x8801.
-	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true}
+	// UI would always fail. The Snapshotter methods and the auto-push 0x0801 handler
+	// remain (stills the device pushes on events/interval are still reassembled and
+	// saved); a model whose firmware supports 0x8801 sets Config.HasSnapshots.
+	return gateway.Capabilities{HasVideo: true, HasCommands: true, HasConfig: true, HasStatus: true, HasSnapshots: p.cfg.HasSnapshots}
 }
 
-// DefaultDevicePort is the JT808 control port the N62 dials (also where it sends
+// DefaultDevicePort is the JT808 control port the device dials (also where it sends
 // JT1078 video unless we advertise the media port — which we do).
-func (*Protocol) DefaultDevicePort() int { return defaultControlPort }
+func (p *Protocol) DefaultDevicePort() int { return p.cfg.ControlPort }
 
-// DefaultMediaPort keeps the JT808 media listener (added with video) off the
-// other video units' ports when hosted in one process.
-func (*Protocol) DefaultMediaPort() int { return defaultMediaPort }
+// DefaultMediaPort keeps this unit's JT808 media listener off the other units'
+// ports when hosted in one process.
+func (p *Protocol) DefaultMediaPort() int { return p.cfg.MediaPort }
 
-// IdleTimeout widens the read deadline: the N62 heartbeats/reports periodically
+// IdleTimeout widens the read deadline: the device heartbeats/reports periodically
 // but can be quiet between fixes.
 func (*Protocol) IdleTimeout() time.Duration { return idleTimeout }
 
 // MappingProvider: JT808 event output is driven by editable alarm-bit / ULV /
-// vendor-TLV → event-code tables (see events.go).
-func (*Protocol) DefaultMappingEntries() []mapping.Entry { return DefaultMappingEntries() }
-func (*Protocol) ApplyMappings(byModel mapping.ByModel)  { ApplyMappings(byModel) }
+// vendor-TLV → event-code tables (see events.go), per unit instance.
+func (*Protocol) DefaultMappingEntries() []mapping.Entry  { return DefaultMappingEntries() }
+func (p *Protocol) ApplyMappings(byModel mapping.ByModel) { p.applyMappings(byModel) }
 
 // settingTimezoneOffset is the editable per-unit setting key for the device's
 // local-clock offset from UTC.
@@ -141,7 +171,7 @@ func (*Protocol) ReadFrame(r *bufio.Reader) (gateway.Frame, error) {
 }
 
 func (p *Protocol) NewSession(c *gateway.Conn) gateway.Session {
-	return &session{conn: c, routes: p.routes, pending: map[int]chan map[string]any{}, frameReasm: map[uint16]*frameReasm{}}
+	return &session{proto: p, conn: c, routes: p.routes, model: p.cfg.Model, pending: map[int]chan map[string]any{}, frameReasm: map[uint16]*frameReasm{}}
 }
 
 // frameReasm accumulates the body fragments of a subpackaged JT808 message (one 0x7E
@@ -153,11 +183,12 @@ type frameReasm struct {
 }
 
 type session struct {
+	proto  *Protocol // owning unit-type (make/model, ports, mapping tables)
 	conn   *gateway.Conn
 	routes *streamRoutes
 	serial string // gateway serial "JT808_<digits>"
 	phone  string // raw terminal-phone digits (for addressing replies)
-	model  string // device model ("N62")
+	model  string // device model ("N62"), from the unit config
 
 	approved  bool
 	lifecycle string // "online" | "offline"
@@ -216,7 +247,7 @@ func (s *session) reassemble(h header, body []byte) ([]byte, bool) {
 	return full, true
 }
 
-func (s *session) log() *logging.Logger { return s.conn.Deps.Log.With(logNS) }
+func (s *session) log() *logging.Logger { return s.conn.Deps.Log.With(s.proto.logNS()) }
 
 // tzOffset is the device's local-clock offset from UTC: the editable per-unit
 // setting (SettingsSchema), falling back to the env-configured global (and for
@@ -357,16 +388,15 @@ func (s *session) authorize(ctx context.Context, h header) bool {
 	if s.serial == "" {
 		s.phone = h.Phone
 		s.serial = device.NormalizeSerial(serialFromPhone(h.Phone))
-		s.model = deviceModel
 	}
 	if s.approved {
 		return true
 	}
 	res, err := s.conn.Deps.Auth.Authorize(ctx, device.RegisterInfo{
 		Serial:   s.serial,
-		Protocol: unitName,
+		Protocol: s.proto.cfg.Unit,
 		RemoteIP: s.conn.RemoteIP(),
-		Meta:     map[string]any{"phone": h.Phone, "model": deviceModel},
+		Meta:     map[string]any{"phone": h.Phone, "model": s.model},
 	})
 	if err != nil {
 		s.log().Error(map[string]any{"event": "device_gate_error", "serial": s.serial, "error": err.Error()})
@@ -384,14 +414,14 @@ func (s *session) authorize(ctx context.Context, h header) bool {
 	if s.conn.Deps.Hub != nil {
 		s.conn.Deps.Hub.Register(gateway.DeviceInfo{
 			Serial:      s.serial,
-			Protocol:    unitName,
-			Model:       deviceModel,
+			Protocol:    s.proto.cfg.Unit,
+			Model:       s.model,
 			RemoteAddr:  s.conn.RemoteAddr().String(),
 			ConnectedAt: time.Now().UTC(),
 			State:       "online",
 		}, s)
 	}
-	s.log().Info(map[string]any{"event": "device_approved", "serial": s.serial, "model": deviceModel})
+	s.log().Info(map[string]any{"event": "device_approved", "serial": s.serial, "model": s.model})
 	return true
 }
 
@@ -406,7 +436,7 @@ func (s *session) handleLocation(ctx context.Context, h header, body []byte) {
 		s.log().Debug(map[string]any{"event": "bad_location", "serial": s.serial, "len": len(body)})
 		return
 	}
-	payload, isEvent := buildLocationPayload(loc, s.model)
+	payload, isEvent := s.proto.buildLocationPayload(loc, s.model)
 	kind := "gps"
 	if isEvent {
 		kind = "event"
@@ -414,7 +444,7 @@ func (s *session) handleLocation(ctx context.Context, h header, body []byte) {
 	// Decode trace for the live Mapping Test. trace has an entry for every raw alarm
 	// signal present (mapped or not), so it's non-empty whenever the device is
 	// signalling an alarm — even one that maps to nothing yet (surfaced as unmapped).
-	_, trace := resolveEventsTrace(loc, s.model)
+	_, trace := s.proto.resolveEventsTrace(loc, s.model)
 	if len(trace) > 0 {
 		// event_forward (the name the Mapping Test matches) carries the trace; logged
 		// at Info so it's visible without per-frame GPS debug noise.
@@ -431,7 +461,7 @@ func (s *session) handleLocation(ctx context.Context, h header, body []byte) {
 			"bearing": loc.Direction, "utc": loc.TimeUTC,
 		})
 	}
-	s.conn.Emit(s.serial, deviceMake, s.model, kind, payload)
+	s.conn.Emit(s.serial, s.proto.cfg.Make, s.model, kind, payload)
 }
 
 func (s *session) OnClose(ctx context.Context) {

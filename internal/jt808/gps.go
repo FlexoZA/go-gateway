@@ -5,7 +5,7 @@ import "encoding/binary"
 // buildLocationPayload normalizes a decoded 0x0200 location into the field map
 // the universal message builder understands. Returns the payload and whether any
 // event code was resolved (so the caller can emit "event" vs "gps").
-func buildLocationPayload(loc location, model string) (map[string]any, bool) {
+func (proto *Protocol) buildLocationPayload(loc location, model string) (map[string]any, bool) {
 	p := map[string]any{
 		"latitude":    loc.Latitude,
 		"longitude":   loc.Longitude,
@@ -37,7 +37,7 @@ func buildLocationPayload(loc location, model string) (map[string]any, bool) {
 		p["satellites"] = float64(v[0])
 	}
 
-	events := resolveEvents(loc, model)
+	events := proto.resolveEvents(loc, model)
 	if len(events) > 0 {
 		ev := make([]any, len(events))
 		for i, e := range events {

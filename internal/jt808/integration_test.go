@@ -31,7 +31,7 @@ func newDeps(t *testing.T, received chan map[string]any) gateway.Deps {
 	}))
 	t.Cleanup(ts.Close)
 	return gateway.Deps{
-		Config:  config.Config{ListenPort: defaultControlPort},
+		Config:  config.Config{ListenPort: N62().ControlPort},
 		Log:     logging.New("test"),
 		Builder: message.NewBuilder("test-gw", 0),
 		Sinks:   []gateway.Sink{webhook.New(ts.URL)},
@@ -42,7 +42,7 @@ func newDeps(t *testing.T, received chan map[string]any) gateway.Deps {
 
 func startServer(t *testing.T, deps gateway.Deps) net.Conn {
 	t.Helper()
-	srv := gateway.New(New(), deps)
+	srv := gateway.New(New(N62()), deps)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

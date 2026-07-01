@@ -23,6 +23,6 @@ func main() {
 		fleetiger.New(),
 		cathexis.New(),
 		navtelecom.New(),
-		jt808.New(),
+		jt808.New(jt808.N62()),
 	)
 }

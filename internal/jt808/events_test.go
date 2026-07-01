@@ -7,7 +7,7 @@ import (
 	"github.com/dfm/device-gateway/internal/core/mapping"
 )
 
-func eventsFor(loc location) []string { return resolveEvents(loc, deviceModel) }
+func eventsFor(loc location) []string { return testProto.resolveEvents(loc, deviceModel) }
 
 func TestResolveAlarmEvents(t *testing.T) {
 	cases := []struct {
@@ -78,8 +78,8 @@ func TestDefaultMappingEntries(t *testing.T) {
 }
 
 func TestApplyMappingsOverride(t *testing.T) {
-	t.Cleanup(func() { ApplyMappings(nil) }) // restore built-in defaults
-	ApplyMappings(mapping.ByModel{
+	t.Cleanup(func() { testProto.ApplyMappings(nil) }) // restore built-in defaults
+	testProto.ApplyMappings(mapping.ByModel{
 		"": mapping.Table{mapTypeAlarm: {29: "CUSTOM:CRASH"}},
 	})
 	if got := eventsFor(location{Alarm: 1 << 29, TLVs: map[byte][]byte{}}); !reflect.DeepEqual(got, []string{"CUSTOM:CRASH"}) {
@@ -89,7 +89,7 @@ func TestApplyMappingsOverride(t *testing.T) {
 	if got := eventsFor(location{TLVs: map[byte][]byte{0xe1: {0x01}}}); len(got) != 1 || got[0] != "HARSH:ACCELERATION" {
 		t.Fatalf("untouched map_type -> %v", got)
 	}
-	ApplyMappings(nil)
+	testProto.ApplyMappings(nil)
 	if got := eventsFor(location{Alarm: 1 << 29, TLVs: map[byte][]byte{}}); len(got) != 1 || got[0] != "COLLISION" {
 		t.Fatalf("after reset -> %v, want [COLLISION]", got)
 	}
@@ -100,7 +100,7 @@ func TestResolveEventsTrace(t *testing.T) {
 	// "table") and the unmapped bit is recorded (source "fallback", empty code) so
 	// the Mapping Test can flag it. bit 29 -> COLLISION; bit 2 is not mapped.
 	loc := location{Alarm: (1 << 29) | (1 << 2), TLVs: map[byte][]byte{}}
-	events, trace := resolveEventsTrace(loc, deviceModel)
+	events, trace := testProto.resolveEventsTrace(loc, deviceModel)
 	if len(events) != 1 || events[0] != "COLLISION" {
 		t.Fatalf("events = %v, want [COLLISION]", events)
 	}
@@ -120,7 +120,7 @@ func TestResolveEventsTrace(t *testing.T) {
 		t.Fatalf("unmapped trace entry = %+v (want fallback, empty code)", unmapped)
 	}
 	// Plain GPS has no raw alarm signal, so no trace (no event_forward is emitted).
-	if _, tr := resolveEventsTrace(location{TLVs: map[byte][]byte{}}, deviceModel); len(tr) != 0 {
+	if _, tr := testProto.resolveEventsTrace(location{TLVs: map[byte][]byte{}}, deviceModel); len(tr) != 0 {
 		t.Fatalf("plain GPS produced trace %v", tr)
 	}
 }
@@ -128,11 +128,11 @@ func TestResolveEventsTrace(t *testing.T) {
 func TestResolveTraceSkipsIdleTLV(t *testing.T) {
 	// A DMS TLV with subtype 0 is idle status, not an alarm — it must produce no
 	// trace (so no spurious "unmapped code 0" in the Mapping Test).
-	if _, tr := resolveEventsTrace(location{TLVs: map[byte][]byte{0x65: {0, 0, 0, 0, 0x00}}}, deviceModel); len(tr) != 0 {
+	if _, tr := testProto.resolveEventsTrace(location{TLVs: map[byte][]byte{0x65: {0, 0, 0, 0, 0x00}}}, deviceModel); len(tr) != 0 {
 		t.Fatalf("idle DMS subtype 0 produced trace %v", tr)
 	}
 	// A nonzero-but-unmapped subtype IS surfaced (fallback) so the operator can map it.
-	_, tr := resolveEventsTrace(location{TLVs: map[byte][]byte{0x65: {0, 0, 0, 0, 0x07}}}, deviceModel)
+	_, tr := testProto.resolveEventsTrace(location{TLVs: map[byte][]byte{0x65: {0, 0, 0, 0, 0x07}}}, deviceModel)
 	if len(tr) != 1 || tr[0].MapType != mapTypeDms || tr[0].Code != 0x07 || tr[0].Source != traceFallback {
 		t.Fatalf("unmapped DMS subtype 7 trace = %+v", tr)
 	}

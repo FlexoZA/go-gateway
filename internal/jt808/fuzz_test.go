@@ -49,8 +49,8 @@ func FuzzParseLocation(f *testing.F) {
 	f.Add(make([]byte, 28))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if loc, ok := parseLocation(data, 0); ok {
-			_, _ = buildLocationPayload(loc, deviceModel)
-			_ = resolveEvents(loc, deviceModel)
+			_, _ = testProto.buildLocationPayload(loc, deviceModel)
+			_ = testProto.resolveEvents(loc, deviceModel)
 		}
 		_ = splitBatch(data)
 	})

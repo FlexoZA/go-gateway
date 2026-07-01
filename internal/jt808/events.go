@@ -2,7 +2,6 @@ package jt808
 
 import (
 	"sort"
-	"sync/atomic"
 
 	"github.com/dfm/device-gateway/internal/core/mapping"
 )
@@ -99,15 +98,6 @@ type Mappings struct {
 	Vendor70 map[int]string
 }
 
-// currentMappingsByModel is the active per-model mapping set. The empty-model key
-// ("") is the unit-wide default (the N62 is the only model today).
-var currentMappingsByModel atomic.Pointer[map[string]*Mappings]
-
-func init() {
-	m := map[string]*Mappings{"": defaultMappings()}
-	currentMappingsByModel.Store(&m)
-}
-
 func defaultMappings() *Mappings {
 	return &Mappings{
 		Alarm:    defaultAlarmEventMap,
@@ -119,14 +109,15 @@ func defaultMappings() *Mappings {
 	}
 }
 
-// mappingsForModel returns the active mapping set for a device model: its own
-// table if present, else the unit default (""), else the built-in defaults.
-func mappingsForModel(model string) *Mappings {
-	if p := currentMappingsByModel.Load(); p != nil {
-		if m, ok := (*p)[model]; ok && m != nil {
+// mappingsForModel returns this unit's active mapping set for a device model: the
+// model's own table if present, else the unit default (""), else the built-in
+// defaults.
+func (p *Protocol) mappingsForModel(model string) *Mappings {
+	if ptr := p.mappings.Load(); ptr != nil {
+		if m, ok := (*ptr)[model]; ok && m != nil {
 			return m
 		}
-		if m, ok := (*p)[""]; ok && m != nil {
+		if m, ok := (*ptr)[""]; ok && m != nil {
 			return m
 		}
 	}
@@ -184,9 +175,9 @@ func buildMappings(loaded mapping.Table) *Mappings {
 	}
 }
 
-// ApplyMappings installs the loaded per-model mapping tables as the active set.
-// Pass nil to reset to the built-in defaults.
-func ApplyMappings(byModel mapping.ByModel) {
+// applyMappings installs the loaded per-model mapping tables as this unit's active
+// set. Pass nil to reset to the built-in defaults.
+func (p *Protocol) applyMappings(byModel mapping.ByModel) {
 	out := map[string]*Mappings{}
 	for model, table := range byModel {
 		out[model] = buildMappings(table)
@@ -194,7 +185,7 @@ func ApplyMappings(byModel mapping.ByModel) {
 	if _, ok := out[""]; !ok {
 		out[""] = defaultMappings()
 	}
-	currentMappingsByModel.Store(&out)
+	p.mappings.Store(&out)
 }
 
 // Trace sources for the live mapping test (mirrors the Howen/Cathexis vocabulary).
@@ -217,8 +208,8 @@ type mapTraceEntry struct {
 // resolveEvents maps a decoded location's alarm bits and vendor/ULV TLVs to a
 // de-duplicated, stable-ordered list of ACM Standard Event Codes. An empty result
 // means a plain GPS update with no event signal.
-func resolveEvents(loc location, model string) []string {
-	events, _ := resolveEventsTrace(loc, model)
+func (p *Protocol) resolveEvents(loc location, model string) []string {
+	events, _ := p.resolveEventsTrace(loc, model)
 	return events
 }
 
@@ -227,8 +218,8 @@ func resolveEvents(loc location, model string) []string {
 // was present (mapped or not) so the mapping test can flag unmapped codes. A trace
 // entry exists even when nothing maps, which is how a wholly-unmapped alarm still
 // surfaces in the tester.
-func resolveEventsTrace(loc location, model string) ([]string, []mapTraceEntry) {
-	m := mappingsForModel(model)
+func (p *Protocol) resolveEventsTrace(loc location, model string) ([]string, []mapTraceEntry) {
+	m := p.mappingsForModel(model)
 	var out []string
 	var trace []mapTraceEntry
 	seen := map[string]bool{}

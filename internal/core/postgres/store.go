@@ -249,6 +249,19 @@ var schema = []string{
 		created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`,
 	`CREATE INDEX IF NOT EXISTS snapshots_serial_created_idx ON snapshots (serial, created_at DESC)`,
+	// One-time migration: the JT808 plugin was split into make/model unit types
+	// (each vendor/model on its own port), so the original generic "jt808" unit
+	// became "dfm-n62" (the unbranded N62 group). Rename its rows across the device
+	// registry, event mappings, per-unit settings, and the unit-scoped settings keys
+	// (device_port:<unit>, cap_<feature>:<unit>). Idempotent: after the first apply
+	// there are no "jt808" rows left, so these no-op. Runs after all tables exist.
+	`UPDATE devices SET protocol = 'dfm-n62' WHERE protocol = 'jt808'`,
+	`UPDATE unknown_devices SET source_protocol_guess = 'dfm-n62' WHERE source_protocol_guess = 'jt808'`,
+	`UPDATE event_mappings SET unit = 'dfm-n62' WHERE unit = 'jt808'`,
+	`UPDATE unit_settings SET unit = 'dfm-n62' WHERE unit = 'jt808'`,
+	`UPDATE server_settings SET key = replace(key, ':jt808', ':dfm-n62')
+		WHERE key LIKE '%:jt808'
+		  AND replace(key, ':jt808', ':dfm-n62') NOT IN (SELECT key FROM server_settings)`,
 }
 
 // Store is the gateway database. It backs device authorization (the unit

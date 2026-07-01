@@ -41,6 +41,6 @@ export function deviceConfigSchema(unit?: string): DeviceConfigSchema | null {
 export function deviceConfigKind(unit?: string): "generic" | "cathexis" | "n62" | null {
   if (!unit) return null;
   if (unit === "cathexis") return "cathexis";
-  if (unit === "jt808") return "n62";
+  if (unit === "dfm-n62") return "n62"; // JT808-based N62 group (was "jt808")
   return registry[unit] ? "generic" : null;
 }
