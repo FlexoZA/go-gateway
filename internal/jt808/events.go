@@ -197,12 +197,40 @@ func ApplyMappings(byModel mapping.ByModel) {
 	currentMappingsByModel.Store(&out)
 }
 
+// Trace sources for the live mapping test (mirrors the Howen/Cathexis vocabulary).
+const (
+	traceTable    = "table"    // a mapping row (DB override or built-in default) resolved it
+	traceFallback = "fallback" // a raw alarm signal was present but no row maps its code
+)
+
+// mapTraceEntry records how one raw JT808 alarm signal decoded against the active
+// mapping tables, for the live mapping-test mode. It is logged (info) alongside
+// event_forward and never affects the universal message sent to sinks. The JSON
+// field names match what the admin Mapping Test reads.
+type mapTraceEntry struct {
+	MapType   string `json:"map_type"`   // "alarm" | "adas" | "dms" | "bsd" | "vendor_e1" | "vendor_70"
+	Code      int    `json:"code"`       // bit index (alarm) or subtype/value looked up in that table
+	EventCode string `json:"event_code"` // resolved standard code ("" when unmapped)
+	Source    string `json:"source"`     // traceTable on a hit, traceFallback on a miss
+}
+
 // resolveEvents maps a decoded location's alarm bits and vendor/ULV TLVs to a
 // de-duplicated, stable-ordered list of ACM Standard Event Codes. An empty result
 // means a plain GPS update with no event signal.
 func resolveEvents(loc location, model string) []string {
+	events, _ := resolveEventsTrace(loc, model)
+	return events
+}
+
+// resolveEventsTrace is resolveEvents plus a per-signal decode trace. The event
+// list is identical to resolveEvents; the trace records every raw alarm signal that
+// was present (mapped or not) so the mapping test can flag unmapped codes. A trace
+// entry exists even when nothing maps, which is how a wholly-unmapped alarm still
+// surfaces in the tester.
+func resolveEventsTrace(loc location, model string) ([]string, []mapTraceEntry) {
 	m := mappingsForModel(model)
 	var out []string
+	var trace []mapTraceEntry
 	seen := map[string]bool{}
 	add := func(code string) {
 		if code == "" || seen[code] {
@@ -211,11 +239,22 @@ func resolveEvents(loc location, model string) []string {
 		seen[code] = true
 		out = append(out, code)
 	}
+	// rec resolves one raw signal against its table: records a trace entry (table on
+	// a hit, fallback on a miss) and adds the mapped event.
+	rec := func(mapType string, code int, table map[int]string) {
+		ev := table[code]
+		src := traceFallback
+		if ev != "" {
+			src = traceTable
+		}
+		add(ev)
+		trace = append(trace, mapTraceEntry{MapType: mapType, Code: code, EventCode: ev, Source: src})
+	}
 
 	// Alarm bitmask (low bit first, for stable ordering).
 	for bit := 0; bit < 32; bit++ {
 		if loc.Alarm&(1<<uint(bit)) != 0 {
-			add(m.Alarm[bit])
+			rec(mapTypeAlarm, bit, m.Alarm)
 		}
 	}
 	// ULV ADAS/DMS/BSD: subtype is byte index 4 of the TLV value (after the 4-byte
@@ -228,28 +267,28 @@ func resolveEvents(loc location, model string) []string {
 	}
 	if v, ok := loc.TLVs[0x64]; ok {
 		if st, ok := subtype(v); ok {
-			add(m.Adas[st])
+			rec(mapTypeAdas, st, m.Adas)
 		}
 	}
 	if v, ok := loc.TLVs[0x65]; ok {
 		if st, ok := subtype(v); ok {
-			add(m.Dms[st])
+			rec(mapTypeDms, st, m.Dms)
 		}
 	}
 	if v, ok := loc.TLVs[0x67]; ok {
 		if st, ok := subtype(v); ok {
-			add(m.Bsd[st])
+			rec(mapTypeBsd, st, m.Bsd)
 		}
 	}
 	// Vendor 0xE1: first value byte.
 	if v, ok := loc.TLVs[0xe1]; ok && len(v) >= 1 {
-		add(m.VendorE1[int(v[0])])
+		rec(mapTypeVendorE1, int(v[0]), m.VendorE1)
 	}
 	// Vendor 0x70: last 3 bytes as a u24.
 	if v, ok := loc.TLVs[0x70]; ok && len(v) >= 3 {
 		tail := v[len(v)-3:]
 		key := int(tail[0])<<16 | int(tail[1])<<8 | int(tail[2])
-		add(m.Vendor70[key])
+		rec(mapTypeVendor70, key, m.Vendor70)
 	}
-	return out
+	return out, trace
 }

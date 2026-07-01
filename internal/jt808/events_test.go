@@ -94,3 +94,33 @@ func TestApplyMappingsOverride(t *testing.T) {
 		t.Fatalf("after reset -> %v, want [COLLISION]", got)
 	}
 }
+
+func TestResolveEventsTrace(t *testing.T) {
+	// A mapped alarm bit plus an unmapped one: the mapped bit resolves (source
+	// "table") and the unmapped bit is recorded (source "fallback", empty code) so
+	// the Mapping Test can flag it. bit 29 -> COLLISION; bit 2 is not mapped.
+	loc := location{Alarm: (1 << 29) | (1 << 2), TLVs: map[byte][]byte{}}
+	events, trace := resolveEventsTrace(loc, deviceModel)
+	if len(events) != 1 || events[0] != "COLLISION" {
+		t.Fatalf("events = %v, want [COLLISION]", events)
+	}
+	var mapped, unmapped *mapTraceEntry
+	for i := range trace {
+		switch trace[i].Code {
+		case 29:
+			mapped = &trace[i]
+		case 2:
+			unmapped = &trace[i]
+		}
+	}
+	if mapped == nil || mapped.MapType != mapTypeAlarm || mapped.EventCode != "COLLISION" || mapped.Source != traceTable {
+		t.Fatalf("mapped trace entry = %+v", mapped)
+	}
+	if unmapped == nil || unmapped.EventCode != "" || unmapped.Source != traceFallback {
+		t.Fatalf("unmapped trace entry = %+v (want fallback, empty code)", unmapped)
+	}
+	// Plain GPS has no raw alarm signal, so no trace (no event_forward is emitted).
+	if _, tr := resolveEventsTrace(location{TLVs: map[byte][]byte{}}, deviceModel); len(tr) != 0 {
+		t.Fatalf("plain GPS produced trace %v", tr)
+	}
+}

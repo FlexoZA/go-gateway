@@ -411,18 +411,25 @@ func (s *session) handleLocation(ctx context.Context, h header, body []byte) {
 	if isEvent {
 		kind = "event"
 	}
-	fields := map[string]any{
-		"event": "location_forward", "serial": s.serial, "kind": kind,
-		"lat": loc.Latitude, "lon": loc.Longitude, "speed_kmh": loc.Speed,
-		"bearing": loc.Direction, "utc": loc.TimeUTC, "alarm": loc.Alarm,
-		"mapped_events": payload["event"],
-	}
-	// Events log at Info so they're visible without per-frame GPS debug noise;
-	// plain GPS stays at Debug.
-	if isEvent {
-		s.log().Info(fields)
+	// Decode trace for the live Mapping Test. trace has an entry for every raw alarm
+	// signal present (mapped or not), so it's non-empty whenever the device is
+	// signalling an alarm — even one that maps to nothing yet (surfaced as unmapped).
+	_, trace := resolveEventsTrace(loc, s.model)
+	if len(trace) > 0 {
+		// event_forward (the name the Mapping Test matches) carries the trace; logged
+		// at Info so it's visible without per-frame GPS debug noise.
+		s.log().Info(map[string]any{
+			"event": "event_forward", "serial": s.serial, "kind": kind, "model": s.model,
+			"lat": loc.Latitude, "lon": loc.Longitude, "speed_kmh": loc.Speed,
+			"bearing": loc.Direction, "utc": loc.TimeUTC, "alarm": loc.Alarm,
+			"mapped_events": payload["event"], "mapping_trace": trace,
+		})
 	} else {
-		s.log().Debug(fields)
+		s.log().Debug(map[string]any{
+			"event": "location_forward", "serial": s.serial, "kind": kind,
+			"lat": loc.Latitude, "lon": loc.Longitude, "speed_kmh": loc.Speed,
+			"bearing": loc.Direction, "utc": loc.TimeUTC,
+		})
 	}
 	s.conn.Emit(s.serial, deviceMake, s.model, kind, payload)
 }
