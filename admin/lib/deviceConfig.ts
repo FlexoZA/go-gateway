@@ -33,12 +33,14 @@ export function deviceConfigSchema(unit?: string): DeviceConfigSchema | null {
 
 // deviceConfigKind selects which Config-tab editor a unit uses: "generic" for the
 // schema-driven DeviceConfig (Howen-style, all-string segments), "cathexis" for the
-// bespoke type-aware CathexisConfig (mixed types + array segments), or null for a
-// unit with no editable device config. Kept here (not the page) so the editor
-// choice stays a registry concern; the bespoke component is imported by the page to
-// avoid a lib→component import cycle.
-export function deviceConfigKind(unit?: string): "generic" | "cathexis" | null {
+// bespoke type-aware CathexisConfig (mixed types + array segments), "n62" for the
+// bespoke JT808/N62 editor (typed ULV ParamType segments), or null for a unit with
+// no editable device config. Kept here (not the page) so the editor choice stays a
+// registry concern; the bespoke components are imported by the page to avoid a
+// lib→component import cycle.
+export function deviceConfigKind(unit?: string): "generic" | "cathexis" | "n62" | null {
   if (!unit) return null;
   if (unit === "cathexis") return "cathexis";
+  if (unit === "jt808") return "n62";
   return registry[unit] ? "generic" : null;
 }

@@ -10,6 +10,7 @@ import { Badge, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 import { useConfirm } from "@/components/confirm";
 import { DeviceConfig } from "@/components/DeviceConfig";
 import { CathexisConfig } from "@/components/CathexisConfig";
+import { N62Config } from "@/components/N62Config";
 import { DeviceVideo } from "@/components/DeviceVideo";
 import { DeviceSnapshots } from "@/components/DeviceSnapshots";
 
@@ -173,7 +174,13 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
 
       {hasConfig && tab === "config" ? (
         online ? (
-          configKind === "cathexis" ? <CathexisConfig serial={serial} /> : <DeviceConfig serial={serial} unit={unitType!} />
+          configKind === "cathexis" ? (
+            <CathexisConfig serial={serial} />
+          ) : configKind === "n62" ? (
+            <N62Config serial={serial} unit={unitType!} />
+          ) : (
+            <DeviceConfig serial={serial} unit={unitType!} />
+          )
         ) : (
           <div className="rounded-md border border-edge bg-panel px-4 py-3 text-sm text-slate-400">
             The device must be connected to read or edit its configuration.

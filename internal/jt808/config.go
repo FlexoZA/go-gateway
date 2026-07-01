@@ -17,13 +17,19 @@ import (
 
 // ulvParamTypes is the full set of ULV ParamType segments the N62 exposes
 // (docs/jt808/N62_CALL_MAPPING.md). Used when RequestConfig is asked for "all".
+// Names are the exact ParamType strings the firmware answers to — an unknown
+// name gets no reply (and can briefly wedge the device's config handler), so
+// these are verified against the live N62.
 var ulvParamTypes = []string{
 	"GenDevInfo", "GenDateTime", "GenDst", "GenStartUp", "GenUser",
 	"VehBaseInfo", "VehPosition", "VehMileage",
-	"RecAttr", "RecStream_M", "RecStream_S", "ReCamAttr", "ReCapAttr",
-	"AlmIoIn", "AlmSpd", "AlmGsn", "Driving",
-	"NetWired", "NetWifi", "NetXg", "NetCms", "NetFtp",
+	"PreDisplay", "PreMargin", "PreOsd",
+	"RecAttr", "RecStream_M", "RecStream_S", "RecCamAttr", "RecCapAttr",
+	"RecPlan", "RecOsd", "RecStorage",
+	"AlmIoIn", "AlmSpd", "AlmGsn", "AlmDriving", "AlmSys",
+	"NetWired", "NetWifi", "NetXg", "NetCms", "NetFtp", "NetUpload",
 	"PerUart", "PerIoOutput",
+	"AiBase", "AiAdas", "AiDms", "AiFace",
 }
 
 // perParamTimeout bounds one ULV Get/Set round-trip.
