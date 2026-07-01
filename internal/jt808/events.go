@@ -265,30 +265,36 @@ func resolveEventsTrace(loc location, model string) ([]string, []mapTraceEntry) 
 		}
 		return 0, false
 	}
+	// For the vendor/ULV TLVs, subtype/value 0 is the "no event" idle status (real
+	// alarms start at 1), so skip it — otherwise every idle status frame would log a
+	// spurious "unmapped code 0". Alarm bits are different: a set bit is always a real
+	// alarm (bit 0 is PANIC), so those are never skipped.
 	if v, ok := loc.TLVs[0x64]; ok {
-		if st, ok := subtype(v); ok {
+		if st, ok := subtype(v); ok && st != 0 {
 			rec(mapTypeAdas, st, m.Adas)
 		}
 	}
 	if v, ok := loc.TLVs[0x65]; ok {
-		if st, ok := subtype(v); ok {
+		if st, ok := subtype(v); ok && st != 0 {
 			rec(mapTypeDms, st, m.Dms)
 		}
 	}
 	if v, ok := loc.TLVs[0x67]; ok {
-		if st, ok := subtype(v); ok {
+		if st, ok := subtype(v); ok && st != 0 {
 			rec(mapTypeBsd, st, m.Bsd)
 		}
 	}
 	// Vendor 0xE1: first value byte.
-	if v, ok := loc.TLVs[0xe1]; ok && len(v) >= 1 {
+	if v, ok := loc.TLVs[0xe1]; ok && len(v) >= 1 && v[0] != 0 {
 		rec(mapTypeVendorE1, int(v[0]), m.VendorE1)
 	}
 	// Vendor 0x70: last 3 bytes as a u24.
 	if v, ok := loc.TLVs[0x70]; ok && len(v) >= 3 {
 		tail := v[len(v)-3:]
 		key := int(tail[0])<<16 | int(tail[1])<<8 | int(tail[2])
-		rec(mapTypeVendor70, key, m.Vendor70)
+		if key != 0 {
+			rec(mapTypeVendor70, key, m.Vendor70)
+		}
 	}
 	return out, trace
 }

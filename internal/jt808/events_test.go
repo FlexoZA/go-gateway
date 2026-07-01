@@ -124,3 +124,16 @@ func TestResolveEventsTrace(t *testing.T) {
 		t.Fatalf("plain GPS produced trace %v", tr)
 	}
 }
+
+func TestResolveTraceSkipsIdleTLV(t *testing.T) {
+	// A DMS TLV with subtype 0 is idle status, not an alarm — it must produce no
+	// trace (so no spurious "unmapped code 0" in the Mapping Test).
+	if _, tr := resolveEventsTrace(location{TLVs: map[byte][]byte{0x65: {0, 0, 0, 0, 0x00}}}, deviceModel); len(tr) != 0 {
+		t.Fatalf("idle DMS subtype 0 produced trace %v", tr)
+	}
+	// A nonzero-but-unmapped subtype IS surfaced (fallback) so the operator can map it.
+	_, tr := resolveEventsTrace(location{TLVs: map[byte][]byte{0x65: {0, 0, 0, 0, 0x07}}}, deviceModel)
+	if len(tr) != 1 || tr[0].MapType != mapTypeDms || tr[0].Code != 0x07 || tr[0].Source != traceFallback {
+		t.Fatalf("unmapped DMS subtype 7 trace = %+v", tr)
+	}
+}
