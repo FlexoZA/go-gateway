@@ -196,6 +196,9 @@ type session struct {
 func (s *session) reassemble(h header, body []byte) ([]byte, bool) {
 	s.frameReasmMu.Lock()
 	defer s.frameReasmMu.Unlock()
+	if s.frameReasm == nil {
+		s.frameReasm = map[uint16]*frameReasm{}
+	}
 	b := s.frameReasm[h.MsgID]
 	if b == nil || b.total != h.SubTotal {
 		b = &frameReasm{total: h.SubTotal, parts: map[uint16][]byte{}}

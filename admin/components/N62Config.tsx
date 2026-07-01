@@ -466,7 +466,10 @@ function MissingCard({ title }: { title: string }) {
   return (
     <div className="card mb-4">
       <h3 className="mb-1 text-sm font-semibold text-slate-200">{title}</h3>
-      <p className="text-xs text-slate-500">The device didn’t return this section. Try Reload.</p>
+      <p className="text-xs text-slate-500">
+        The device returned no data for this section. Some firmware doesn’t expose every setting over the gateway link (those are configurable on the
+        unit’s own screen). If it’s just a slow read, use Reload.
+      </p>
     </div>
   );
 }
