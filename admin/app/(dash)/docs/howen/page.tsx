@@ -36,6 +36,15 @@ export default function HowenDocsPage() {
         Live GPS and events are <strong>pushed</strong> to you via webhooks; status, video, and
         clips are <strong>pulled</strong> on request.
       </p>
+      <Callout tone="info" title="Device models">
+        The universal message&rsquo;s <code>model</code> is the device&rsquo;s own firmware model
+        identifier — e.g. <code>MC30-02H</code> or <code>ME40-02</code>. A trailing firmware-version
+        token (the <code>V8</code> in <code>ME40-02V8</code>) is stripped so a model keeps a stable
+        identity — and its event-mapping table — across firmware bumps. Both the MC30-02 and the
+        newer ME40-02 speak the same Howen H-Protocol, so a new model onboards with no code change;
+        its per-model event mappings live alongside the others on the{" "}
+        <Link href="/device-mapping">Device Mapping</Link> page.
+      </Callout>
 
       {/* ---------------------------------------------------------------- */}
       <h2 id="auth">Authentication</h2>
@@ -62,7 +71,7 @@ export default function HowenDocsPage() {
     {
       "serial": "864312087845313",
       "protocol": "howen",
-      "model": "Hero-MC30-02",
+      "model": "MC30-02H",
       "remote_addr": "102.135.1.20:42534",
       "connected_at": "2026-06-20T16:14:51.703Z",
       "commands": ["clear_alarm", "reboot_unit", "..."]
@@ -116,7 +125,7 @@ export default function HowenDocsPage() {
     "imei": "864312087845313",
     "serial_no": "864312087845313",
     "type": "howen",
-    "model": "Hero-MC30-02"
+    "model": "MC30-02H"
   },
   "network": { "remote_ipv4": "102.135.1.20", "remote_port": 42534 },
   "gsm": [ { "signal_lvl": 8, "signal_str": 80, "data_mode": "4",
@@ -166,7 +175,7 @@ export default function HowenDocsPage() {
       <CodeBlock label="200 OK (shape)">{`{
   "serial": "864312087845313",
   "connection": {
-    "serial": "864312087845313", "protocol": "howen", "model": "Hero-MC30-02",
+    "serial": "864312087845313", "protocol": "howen", "model": "MC30-02H",
     "state": "online", "remote_addr": "102.135.1.20:42534",
     "connected_at": "2026-06-20T16:14:51.703Z"
   },
