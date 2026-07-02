@@ -184,6 +184,7 @@ type Server struct {
 	playlistObserver func(relPath string) // notified when a viewer fetches an HLS playlist
 	streams          StreamLister         // enumerate/stop active live streams; nil when no unit has video
 	ports            PortLister           // device-facing ports to report a listening check for
+	metrics          *metricsSampler      // background host CPU sampler for GET /api/metrics
 	srv              *http.Server
 }
 
@@ -278,6 +279,7 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		verifier:    verifier,
 		data:        data,
 		hub:         hub,
+		metrics:     newMetricsSampler(),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
@@ -325,6 +327,8 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		"POST /api/streams/stop-all": s.handleStreamsStopAll,
 		// Device-facing port listeners + a self-check that each is accepting.
 		"GET /api/ports": s.handlePortsList,
+		// Host CPU/memory utilization + process runtime stats (dashboard cards).
+		"GET /api/metrics": s.handleMetrics,
 
 		// Discover what footage a device has (file query) before requesting a clip.
 		"GET /api/units/{serial}/recordings": s.handleQueryRecordings,
@@ -410,6 +414,9 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 
 // Run serves until ctx is cancelled, then shuts down gracefully.
 func (s *Server) Run(ctx context.Context) error {
+	if s.metrics != nil {
+		go s.metrics.run(ctx)
+	}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

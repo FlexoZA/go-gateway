@@ -17,6 +17,14 @@ type Unit = {
   commands: string[];
 };
 type PortStatus = { unit: string; kind: string; port: number; listening: boolean };
+type Metrics = {
+  cpu_percent?: number;
+  mem_percent?: number;
+  mem_used_mb?: number;
+  mem_total_mb?: number;
+  process_rss_mb?: number;
+  goroutines?: number;
+};
 
 export default function DashboardPage() {
   const info = useGatewayInfo();
@@ -25,11 +33,13 @@ export default function DashboardPage() {
   const pending = useFetch<{ devices: any[] }>("devices/pending", 10000);
   const streams = useFetch<{ count: number; streams: any[] }>("streams", 5000);
   const ports = useFetch<{ ports: PortStatus[] }>("ports", 15000);
+  const metrics = useFetch<Metrics>("metrics", 5000);
 
   const connected = units.data?.units ?? [];
   const portList = ports.data?.ports ?? [];
   const standby = connected.filter((u) => u.state === "sleep").length;
   const streamCount = streams.data?.count ?? 0;
+  const m = metrics.data;
 
   const [stopping, setStopping] = useState(false);
   const [stopErr, setStopErr] = useState<string | null>(null);
@@ -75,6 +85,27 @@ export default function DashboardPage() {
         <Stat label="Active streams" value={streamCount} tone="green" badge="streaming" />
         <Stat label="Approved devices" value={devices.data?.devices?.length ?? "—"} tone="indigo" badge="registry" />
         <Stat label="Pending approval" value={pending.data?.devices?.length ?? "—"} tone="amber" badge="pending" />
+      </div>
+
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Gauge
+          label="CPU usage"
+          badge="gateway host"
+          percent={m?.cpu_percent}
+          detail={m?.goroutines != null ? `${m.goroutines} goroutines` : undefined}
+          error={metrics.error}
+        />
+        <Gauge
+          label="Memory usage"
+          badge="gateway host"
+          percent={m?.mem_percent}
+          detail={
+            m?.mem_used_mb != null && m?.mem_total_mb != null
+              ? `${fmtMB(m.mem_used_mb)} / ${fmtMB(m.mem_total_mb)}${m.process_rss_mb != null ? ` · ${fmtMB(m.process_rss_mb)} process` : ""}`
+              : undefined
+          }
+          error={metrics.error}
+        />
       </div>
 
       {portList.length > 0 && (
@@ -186,6 +217,50 @@ function Stat({ label, value, tone, badge }: { label: string; value: number | st
       </div>
     </div>
   );
+}
+
+function Gauge({
+  label,
+  badge,
+  percent,
+  detail,
+  error,
+}: {
+  label: string;
+  badge: string;
+  percent?: number;
+  detail?: string;
+  error?: string | null;
+}) {
+  const has = typeof percent === "number";
+  const pct = has ? Math.max(0, Math.min(100, percent!)) : 0;
+  const tone = pct >= 90 ? "rose" : pct >= 75 ? "amber" : "green";
+  const barColor =
+    tone === "rose" ? "bg-rose-500" : tone === "amber" ? "bg-amber-500" : "bg-green-500";
+  return (
+    <div className="card">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs uppercase tracking-wide text-slate-400">{label}</span>
+        <Badge tone="slate">{badge}</Badge>
+      </div>
+      <div className="mt-2 flex items-baseline gap-2">
+        <span className="text-2xl font-semibold text-white">{has ? `${pct.toFixed(1)}%` : "—"}</span>
+        {detail && <span className="text-xs text-slate-400">{detail}</span>}
+      </div>
+      <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-panel/80 ring-1 ring-inset ring-edge">
+        <div
+          className={`h-full rounded-full ${barColor} transition-all duration-500`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {error && !has && <div className="mt-2 text-xs text-slate-500">Metrics unavailable</div>}
+    </div>
+  );
+}
+
+function fmtMB(mb: number): string {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${Math.round(mb)} MB`;
 }
 
 function fmt(ts?: string): string {
