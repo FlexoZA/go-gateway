@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -252,6 +253,27 @@ func (s *session) OnClose(ctx context.Context) {
 	s.conn.Deps.Log.With("tcp/howen").Debug(map[string]any{"event": "close", "serial": s.serial, "current": current})
 }
 
+// firmwareVersionSuffix matches a trailing firmware-version token (e.g. the
+// "V8" in "ME40-02V8"). Some Howen models append it to the reported `fw`.
+var firmwareVersionSuffix = regexp.MustCompile(`V[0-9]+$`)
+
+// modelFromFirmware derives the stable model identifier from a device's `fw`
+// firmware string. Devices report firmware like "MC30-02H" or "ME40-02V8". We
+// strip only a trailing "V<n>" firmware-version token so per-model event
+// mappings survive firmware updates (an ME40 that bumps from V8 to V9 stays
+// model "ME40-02" rather than orphaning its mapping table). Any string without
+// that suffix — including the existing "MC30-02H" — passes through unchanged,
+// so established models keep their identity and unrecognised firmware onboards
+// verbatim without code changes. The raw `fw` is preserved in the registration
+// meta for forensics.
+func modelFromFirmware(fw string) string {
+	fw = strings.TrimSpace(fw)
+	if stripped := firmwareVersionSuffix.ReplaceAllString(fw, ""); stripped != "" {
+		return stripped
+	}
+	return fw
+}
+
 func (s *session) handleRegistration(ctx context.Context, payload []byte) error {
 	log := s.conn.Deps.Log.With("tcp/howen")
 	reg, err := parseHowenJSONObject(payload)
@@ -269,7 +291,7 @@ func (s *session) handleRegistration(ctx context.Context, payload []byte) error 
 	s.imei = strings.TrimSpace(toString(reg["imei"]))
 	s.model = defaultModel
 	if fw := strings.TrimSpace(toString(reg["fw"])); fw != "" {
-		s.model = fw
+		s.model = modelFromFirmware(fw)
 	}
 	s.howenSession = toString(reg["ss"])
 
