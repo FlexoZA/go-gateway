@@ -179,6 +179,7 @@ func (p *Protocol) NewSession(c *gateway.Conn) gateway.Session {
 // package has arrived.
 type frameReasm struct {
 	total uint16
+	bytes int // aggregate size of buffered fragments, bounded by maxReasmBytes
 	parts map[uint16][]byte
 }
 
@@ -224,9 +225,18 @@ type session struct {
 // reassemble buffers one subpackaged body fragment and returns the concatenated body
 // once all packages (1..total) have arrived. Fragments of different messages are kept
 // apart by MsgID; a change in the advertised total resets the buffer.
+//
+// Fragment index, count and size are all device-controlled, so the buffer is guarded:
+// out-of-range indices are dropped, and once the aggregate exceeds maxReasmBytes the
+// whole reassembly is discarded rather than grown without bound.
 func (s *session) reassemble(h header, body []byte) ([]byte, bool) {
 	s.frameReasmMu.Lock()
 	defer s.frameReasmMu.Unlock()
+	// SubIndex is 1-based and must fall within the advertised total; anything else
+	// is malformed (or hostile) and cannot contribute to a valid message.
+	if h.SubIndex < 1 || h.SubIndex > h.SubTotal {
+		return nil, false
+	}
 	if s.frameReasm == nil {
 		s.frameReasm = map[uint16]*frameReasm{}
 	}
@@ -235,11 +245,20 @@ func (s *session) reassemble(h header, body []byte) ([]byte, bool) {
 		b = &frameReasm{total: h.SubTotal, parts: map[uint16][]byte{}}
 		s.frameReasm[h.MsgID] = b
 	}
+	if prev, ok := b.parts[h.SubIndex]; ok {
+		b.bytes -= len(prev) // a resent fragment replaces the old one
+	}
+	if b.bytes+len(body) > maxReasmBytes {
+		delete(s.frameReasm, h.MsgID)
+		s.log().Debug(map[string]any{"event": "reasm_oversize", "msg_id": h.MsgID, "total": h.SubTotal})
+		return nil, false
+	}
 	b.parts[h.SubIndex] = append([]byte(nil), body...)
+	b.bytes += len(body)
 	if len(b.parts) < int(b.total) {
 		return nil, false
 	}
-	full := make([]byte, 0, len(body)*int(b.total))
+	full := make([]byte, 0, b.bytes)
 	for i := uint16(1); i <= b.total; i++ {
 		full = append(full, b.parts[i]...)
 	}

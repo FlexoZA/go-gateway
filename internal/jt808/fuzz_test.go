@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"testing"
 	"time"
+
+	"github.com/dfm/device-gateway/internal/core/gateway"
+	"github.com/dfm/device-gateway/internal/core/logging"
 )
 
 // FuzzReadFrame ensures the frame reader never panics on arbitrary bytes.
@@ -38,6 +41,30 @@ func FuzzReadJT1078Frame(f *testing.F) {
 			if _, err := readJT1078Frame(r); err != nil {
 				return
 			}
+		}
+	})
+}
+
+// FuzzReassemble drives the subpackage reassembler with attacker-shaped headers to
+// ensure it never panics and never buffers more than maxReasmBytes regardless of the
+// advertised SubTotal / SubIndex sequence (the unauthenticated-OOM guard).
+func FuzzReassemble(f *testing.F) {
+	f.Add(uint16(3), uint16(1), []byte("abc"))
+	f.Add(uint16(0xFFFF), uint16(1), bytes.Repeat([]byte{0x41}, maxFrameBytes))
+	f.Add(uint16(2), uint16(5), []byte{0x00})
+	f.Fuzz(func(t *testing.T, total, startIdx uint16, body []byte) {
+		if len(body) > maxFrameBytes {
+			body = body[:maxFrameBytes] // frames are size-capped before reaching reassemble
+		}
+		s := &session{proto: New(N62()), conn: &gateway.Conn{Deps: gateway.Deps{Log: logging.New("test")}}}
+		idx := startIdx
+		for i := 0; i < 512; i++ {
+			h := header{MsgID: msgUlvParamResp, Subpackage: true, SubTotal: total, SubIndex: idx}
+			s.reassemble(h, body)
+			if b := s.frameReasm[msgUlvParamResp]; b != nil && b.bytes > maxReasmBytes {
+				t.Fatalf("reassembly buffer exceeded cap: %d > %d", b.bytes, maxReasmBytes)
+			}
+			idx++
 		}
 	})
 }
