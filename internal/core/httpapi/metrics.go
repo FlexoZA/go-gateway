@@ -77,7 +77,7 @@ func (m *metricsSampler) cpu() (float64, bool) {
 // stats, for the dashboard's resource cards. CPU% comes from the background
 // sampler; memory and Go runtime numbers are read on demand. Fields that can't be
 // read on the host platform are omitted rather than reported as zero.
-func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 
@@ -85,6 +85,11 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		"num_cpu":       runtime.NumCPU(),
 		"goroutines":    runtime.NumGoroutine(),
 		"heap_alloc_mb": round1(float64(ms.Alloc) / (1 << 20)),
+	}
+	if s.telemetryStats != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		body["telemetry"] = s.telemetryStats(ctx)
+		cancel()
 	}
 	if s.metrics != nil {
 		if pct, ok := s.metrics.cpu(); ok {

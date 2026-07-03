@@ -96,3 +96,33 @@ func TestTouchPlaylistPathResetsViewerIdle(t *testing.T) {
 	// A path for a stream we don't host must be a no-op, not a panic.
 	m.TouchPlaylistPath("OTHER/0/0/stream.m3u8")
 }
+
+// TestRegistryLockReleasedBeforeStreamLock guards the deadlock the reaper exists to
+// break: a write wedged on ffmpeg's stdin holds a stream's s.mu, and the reader
+// paths (ActiveStreams/reapIdle/TouchPlaylistPath) must evaluate that stream's lock
+// WITHOUT holding the registry lock m.mu — otherwise one stuck stream freezes the
+// whole manager. We simulate the wedged write by holding a stream's s.mu, then
+// assert m.mu is still acquirable while a reader is blocked on that stream.
+func TestRegistryLockReleasedBeforeStreamLock(t *testing.T) {
+	m := newTestManager(t)
+	stuck := &Stream{ID: "stuck", Dir: filepath.Join(m.hlsRoot, "stuck"), Started: time.Now()}
+	add(m, stuck)
+
+	stuck.mu.Lock() // stand in for a write blocked on a non-draining ffmpeg stdin
+	defer stuck.mu.Unlock()
+
+	// ActiveStreams must touch every live stream, so it will block on stuck.s.mu —
+	// but only after releasing m.mu.
+	go m.ActiveStreams()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if m.mu.TryLock() {
+			m.mu.Unlock()
+			return // registry lock is free while the reader is blocked — correct
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("m.mu held while a reader was blocked on a stream lock — registry frozen")
+		}
+	}
+}

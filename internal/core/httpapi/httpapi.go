@@ -186,11 +186,12 @@ type Server struct {
 	internalToken    string
 	hlsRoot          string
 	clipsRoot        string
-	playlistObserver func(relPath string) // notified when a viewer fetches an HLS playlist
-	streams          StreamLister         // enumerate/stop active live streams; nil when no unit has video
-	ports            PortLister           // device-facing ports to report a listening check for
-	metrics          *metricsSampler      // background host CPU sampler for GET /api/metrics
-	backups          BackupService        // gateway-DB backup list/run/download; nil when unset
+	playlistObserver func(relPath string)                 // notified when a viewer fetches an HLS playlist
+	streams          StreamLister                         // enumerate/stop active live streams; nil when no unit has video
+	ports            PortLister                           // device-facing ports to report a listening check for
+	metrics          *metricsSampler                      // background host CPU sampler for GET /api/metrics
+	telemetryStats   func(context.Context) map[string]any // webhook delivery stats for GET /api/metrics; nil when unset
+	backups          BackupService                        // gateway-DB backup list/run/download; nil when unset
 	srv              *http.Server
 }
 
@@ -283,6 +284,10 @@ func (s *Server) SetStreamLister(l StreamLister) { s.streams = l }
 
 // SetPortLister wires the device-facing port list reported by GET /api/ports.
 func (s *Server) SetPortLister(l PortLister) { s.ports = l }
+
+// SetTelemetryStats wires a provider of webhook delivery stats (backlog, delivered,
+// failed, dropped) reported under "telemetry" by GET /api/metrics. Nil = omitted.
+func (s *Server) SetTelemetryStats(fn func(context.Context) map[string]any) { s.telemetryStats = fn }
 
 // SetBackupService wires the gateway-DB backup manager (run/list/download/delete).
 // Nil leaves the /api/backups routes responding 503.
