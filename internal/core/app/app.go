@@ -15,6 +15,7 @@ package app
 
 import (
 	"context"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -25,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dfm/device-gateway/internal/core/backup"
 	"github.com/dfm/device-gateway/internal/core/config"
 	"github.com/dfm/device-gateway/internal/core/device"
 	"github.com/dfm/device-gateway/internal/core/eventcodes"
@@ -65,6 +67,7 @@ type App struct {
 
 	store       *postgres.Store // may be nil (no database)
 	webhookSink *webhook.Sink   // always wired (no-ops while empty)
+	backups     *backup.Manager // nil unless a database and BACKUPS_ROOT are set
 
 	units []*unitRuntime
 }
@@ -137,6 +140,16 @@ func New(protos ...gateway.Protocol) *App {
 		log.Info(map[string]any{"event": "telemetry_sink", "backend": "webhook"})
 	} else {
 		log.Info(map[string]any{"event": "telemetry_sink_pending", "detail": "no webhook URL yet; set it in Server Settings or DEVICE_WEBHOOK_URL"})
+	}
+
+	// Scheduled gateway-DB backups need the database and a destination directory.
+	if a.store != nil && cfg.BackupsRoot != "" {
+		if mgr, err := backup.NewManager(cfg.BackupsRoot, a.store, log); err != nil {
+			log.Error(map[string]any{"event": "backup_init_failed", "error": err.Error()})
+		} else {
+			a.backups = mgr
+			log.Info(map[string]any{"event": "backups_enabled", "dir": cfg.BackupsRoot})
+		}
 	}
 
 	// Build a runtime per unit type. Each resolves its own admin-editable port.
@@ -492,6 +505,13 @@ func (a *App) startStoreBackedServices(ctx context.Context) {
 		}
 		a.startMediaRetention(ctx)
 	}
+
+	// Scheduled gateway-DB backups: seed the schedule settings on first run and run
+	// the daily backup scheduler. The manager is created in New (needs the store).
+	if a.backups != nil {
+		a.seedBackupSettings(ctx)
+		a.startBackups(ctx)
+	}
 }
 
 // startHTTPAPI builds and runs the management/control HTTP API for every unit.
@@ -516,6 +536,9 @@ func (a *App) startHTTPAPI(ctx context.Context) {
 		a.log.Info(map[string]any{"event": "internal_token_enabled"})
 	}
 	api.SetPortLister(a) // device-facing port listeners + reachability self-check
+	if a.backups != nil {
+		api.SetBackupService(backupService{a.backups}) // gateway-DB backup list/run/download
+	}
 	if vu := a.anyMedia(); vu != nil {
 		api.SetHLSRoot(a.cfg.HLSRoot)
 		if vu.clips != nil {
@@ -790,6 +813,132 @@ func (a *App) mediaRetentionDays(ctx context.Context) int {
 		return a.cfg.MediaRetentionDays
 	}
 	return n
+}
+
+// backupService adapts *backup.Manager to httpapi.BackupService, converting the
+// manager's Info to the API's BackupInfo (RFC3339 timestamps).
+type backupService struct{ m *backup.Manager }
+
+func toBackupInfo(i backup.Info) httpapi.BackupInfo {
+	return httpapi.BackupInfo{Name: i.Name, Size: i.Size, CreatedAt: i.CreatedAt.UTC().Format(time.RFC3339), Rows: i.Rows}
+}
+
+func (b backupService) RunBackup(ctx context.Context) (httpapi.BackupInfo, error) {
+	info, err := b.m.RunBackup(ctx, time.Now())
+	if err != nil {
+		return httpapi.BackupInfo{}, err
+	}
+	return toBackupInfo(info), nil
+}
+
+func (b backupService) ListBackups() ([]httpapi.BackupInfo, error) {
+	list, err := b.m.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]httpapi.BackupInfo, len(list))
+	for i, info := range list {
+		out[i] = toBackupInfo(info)
+	}
+	return out, nil
+}
+
+func (b backupService) OpenBackup(name string) (io.ReadCloser, int64, error) { return b.m.Open(name) }
+func (b backupService) DeleteBackup(name string) error                       { return b.m.Delete(name) }
+
+// seedBackupSettings seeds the backup schedule settings from env on first run.
+func (a *App) seedBackupSettings(ctx context.Context) {
+	seed := func(key, val string) {
+		if err := a.store.SeedSettingDefault(ctx, key, val); err != nil {
+			a.log.Error(map[string]any{"event": "backup_seed_failed", "key": key, "error": err.Error()})
+		}
+	}
+	seed(postgres.SettingBackupEnabled, strconv.FormatBool(a.cfg.BackupEnabled))
+	seed(postgres.SettingBackupTime, a.cfg.BackupTime)
+	seed(postgres.SettingBackupRetention, strconv.Itoa(a.cfg.BackupRetention))
+}
+
+// startBackups runs the daily backup scheduler: every minute it checks whether
+// backups are enabled and the configured HH:MM (UTC) has arrived, and if so runs one
+// (at most once per day) and prunes to the retention count. Settings are read live,
+// so schedule edits in the admin take effect without a restart.
+func (a *App) startBackups(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		var lastRun string // YYYY-MM-DD of the last completed scheduled run
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				now = now.UTC()
+				if !a.backupSetting(ctx, postgres.SettingBackupEnabled, a.cfg.BackupEnabled) {
+					continue
+				}
+				if now.Format("15:04") != a.backupTime(ctx) {
+					continue
+				}
+				today := now.Format("2006-01-02")
+				if lastRun == today {
+					continue // already ran today
+				}
+				lastRun = today
+				a.runScheduledBackup(ctx)
+			}
+		}
+	}()
+}
+
+func (a *App) runScheduledBackup(ctx context.Context) {
+	bctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	if _, err := a.backups.RunBackup(bctx, time.Now()); err != nil {
+		a.log.Error(map[string]any{"event": "backup_failed", "error": err.Error()})
+		return
+	}
+	keep := a.backupRetention(ctx)
+	if _, err := a.backups.Prune(keep); err != nil {
+		a.log.Error(map[string]any{"event": "backup_prune_failed", "error": err.Error()})
+	}
+}
+
+// backupSetting reads a boolean backup setting, falling back to def.
+func (a *App) backupSetting(ctx context.Context, key string, def bool) bool {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if v, ok, err := a.store.GetSetting(cctx, key); err == nil && ok {
+		return parseBoolSetting(v)
+	}
+	return def
+}
+
+// backupTime reads the configured daily HH:MM (UTC), falling back to the env default.
+func (a *App) backupTime(ctx context.Context) string {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if v, ok, err := a.store.GetSetting(cctx, postgres.SettingBackupTime); err == nil && ok && validHHMM(v) {
+		return strings.TrimSpace(v)
+	}
+	return a.cfg.BackupTime
+}
+
+// backupRetention reads the keep-N retention count, falling back to the env default.
+func (a *App) backupRetention(ctx context.Context) int {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if v, ok, err := a.store.GetSetting(cctx, postgres.SettingBackupRetention); err == nil && ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return a.cfg.BackupRetention
+}
+
+// validHHMM reports whether s is a valid 24-hour HH:MM time.
+func validHHMM(s string) bool {
+	_, err := time.Parse("15:04", strings.TrimSpace(s))
+	return err == nil
 }
 
 // applyWebhooks loads the enabled webhook URLs and installs them as the sink's

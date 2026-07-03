@@ -27,6 +27,8 @@ applied in `internal/core/config`.
 | `HLS_ROOT` | `/tmp/hls` | Directory where ffmpeg writes HLS playlists/segments for live streams |
 | `CLIPS_ROOT` | `/var/lib/gateway/clips` | Directory where pulled `.mp4` clip files **and** saved snapshot JPEGs (under `snapshots/`) are stored (the server-side "bucket"). Back this with a persistent volume |
 | `MEDIA_RETENTION_DAYS` | `30` | **Seeds** the `media_retention_days` server setting on first run: how long stored clips/snapshots are kept before an hourly reaper deletes them (files + rows). `0` = keep forever. Thereafter edit it live in the admin (Server Settings → Clip & snapshot retention); this env value only sets the initial default |
+| `BACKUPS_ROOT` | `/var/lib/gateway/backups` | Directory scheduled gateway-DB backups are written to (persist this volume). Empty disables backups |
+| `BACKUP_ENABLED` / `BACKUP_TIME` / `BACKUP_RETENTION` | `true` / `02:00` / `7` | **Seed** the backup schedule settings on first run: whether the daily backup runs, its HH:MM (UTC) time, and how many archives to keep. Thereafter edit live in the admin (Server Settings → Database backups). Restore with `cmd/backup restore` (see below) |
 | `FFMPEG_PATH` | `ffmpeg` | Path to the ffmpeg binary used to mux HLS and clips |
 | `DEBUG` | _(empty)_ | `1`/`true`/`*` for all debug logs, or a namespace like `tcp/howen`, `http` |
 
@@ -86,6 +88,22 @@ make apikey ARGS='create --name frontend'
 make apikey ARGS='list'
 make apikey ARGS='revoke --prefix dgw_AbCd'
 ```
+
+### Backups — `cmd/backup`
+The gateway takes scheduled database backups on its own (Server Settings → Database
+backups; written to `BACKUPS_ROOT`). `cmd/backup` is the manual/restore counterpart —
+it dumps or restores the gateway DB (registry, users, keys, mappings, settings, clip
+metadata; **not** telemetry). Because the gateway owns its schema (recreated on boot),
+this is a logical row dump, no `pg_dump` needed.
+
+```bash
+go run ./cmd/backup dump  --out gateway-backup.tar.gz   # or to stdout
+go run ./cmd/backup restore --in gateway-backup.tar.gz --yes   # DESTRUCTIVE: truncates + reloads
+```
+
+Restore into a database whose schema already exists (start the gateway once, then
+restore). A backup downloaded from the admin is the same archive and restores the
+same way.
 
 ### New unit type — `scripts/new-gateway.sh`
 Scaffold a new unit type's **code** from the GPS-only template (a developer task,

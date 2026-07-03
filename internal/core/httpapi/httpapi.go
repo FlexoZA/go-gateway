@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -95,6 +96,9 @@ const (
 	settingGatewayName         = "gateway_name"
 	settingDeviceRejectUnknown = "device_reject_unknown"
 	settingMediaRetentionDays  = "media_retention_days"
+	settingBackupEnabled       = "backup_enabled"
+	settingBackupTime          = "backup_time"
+	settingBackupRetention     = "backup_retention"
 )
 
 // errNotFound mirrors postgres.ErrNotFound without importing it (the store
@@ -186,7 +190,25 @@ type Server struct {
 	streams          StreamLister         // enumerate/stop active live streams; nil when no unit has video
 	ports            PortLister           // device-facing ports to report a listening check for
 	metrics          *metricsSampler      // background host CPU sampler for GET /api/metrics
+	backups          BackupService        // gateway-DB backup list/run/download; nil when unset
 	srv              *http.Server
+}
+
+// BackupInfo describes one gateway-DB backup archive for the admin API.
+type BackupInfo struct {
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	CreatedAt string `json:"created_at"`
+	Rows      int64  `json:"rows,omitempty"`
+}
+
+// BackupService runs, lists, serves, and deletes gateway-DB backups. The app
+// implements it via the backup manager. Nil disables the /api/backups routes.
+type BackupService interface {
+	RunBackup(ctx context.Context) (BackupInfo, error)
+	ListBackups() ([]BackupInfo, error)
+	OpenBackup(name string) (io.ReadCloser, int64, error)
+	DeleteBackup(name string) error
 }
 
 // PortInfo is one device-facing TCP port the gateway listens on.
@@ -261,6 +283,10 @@ func (s *Server) SetStreamLister(l StreamLister) { s.streams = l }
 
 // SetPortLister wires the device-facing port list reported by GET /api/ports.
 func (s *Server) SetPortLister(l PortLister) { s.ports = l }
+
+// SetBackupService wires the gateway-DB backup manager (run/list/download/delete).
+// Nil leaves the /api/backups routes responding 503.
+func (s *Server) SetBackupService(b BackupService) { s.backups = b }
 
 // New builds the API server. units are the hosted unit types (name + effective
 // capabilities + optional settings schema); the first is the back-compat default
@@ -380,6 +406,12 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		// Per-unit capability disable-toggles (turn off a supported feature so the
 		// admin hides it). Applies live; can't enable an unsupported feature.
 		"PUT /api/unit-types/{unit}/capabilities": s.handleSetCapabilities,
+
+		// Gateway-DB backups: list, run on demand, download, delete.
+		"GET /api/backups":                 s.handleListBackups,
+		"POST /api/backups":                s.handleRunBackup,
+		"GET /api/backups/{name}/download": s.handleDownloadBackup,
+		"DELETE /api/backups/{name}":       s.handleDeleteBackup,
 
 		// Telemetry webhooks (the GPS/event data sinks).
 		"GET /api/webhooks":         s.handleListWebhooks,
@@ -1891,6 +1923,22 @@ func (s *Server) handleSetSetting(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if key == settingBackupEnabled && !validBool(body.Value) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "backup_enabled must be true or false"})
+		return
+	}
+	if key == settingBackupTime {
+		if _, err := time.Parse("15:04", strings.TrimSpace(body.Value)); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "backup_time must be a 24-hour time HH:MM (UTC)"})
+			return
+		}
+	}
+	if key == settingBackupRetention {
+		if n, err := strconv.Atoi(strings.TrimSpace(body.Value)); err != nil || n < 1 || n > 3650 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "backup_retention must be a whole number between 1 and 3650"})
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := s.data.SetSetting(ctx, key, body.Value); err != nil {
@@ -2173,6 +2221,73 @@ func validHTTPURL(v string) bool {
 }
 
 // GET /api/webhooks — all telemetry webhooks.
+// backupsReady reports 503 when no backup service is wired (no DB / BACKUPS_ROOT).
+func (s *Server) backupsReady(w http.ResponseWriter) bool {
+	if s.backups == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "backups not configured"})
+		return false
+	}
+	return true
+}
+
+// GET /api/backups — list existing gateway-DB backup archives, newest first.
+func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
+	if !s.backupsReady(w) {
+		return
+	}
+	list, err := s.backups.ListBackups()
+	if err != nil {
+		s.dataError(w, "list_backups", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backups": list})
+}
+
+// POST /api/backups — run a backup now and return its info.
+func (s *Server) handleRunBackup(w http.ResponseWriter, r *http.Request) {
+	if !s.backupsReady(w) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	info, err := s.backups.RunBackup(ctx)
+	if err != nil {
+		s.dataError(w, "run_backup", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backup": info})
+}
+
+// GET /api/backups/{name}/download — stream a backup archive.
+func (s *Server) handleDownloadBackup(w http.ResponseWriter, r *http.Request) {
+	if !s.backupsReady(w) {
+		return
+	}
+	name := r.PathValue("name")
+	rc, size, err := s.backups.OpenBackup(name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "backup not found"})
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(name)))
+	_, _ = io.Copy(w, rc)
+}
+
+// DELETE /api/backups/{name} — delete a backup archive.
+func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
+	if !s.backupsReady(w) {
+		return
+	}
+	if err := s.backups.DeleteBackup(r.PathValue("name")); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "backup not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 	if !s.dataReady(w) {
 		return

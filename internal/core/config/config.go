@@ -93,6 +93,17 @@ type Config struct {
 	// deletes them. 0 = keep forever. Thereafter it is edited live in the admin
 	// Server Settings; this env value only sets the initial default. Default 30.
 	MediaRetentionDays int
+
+	// BackupsRoot is the directory scheduled gateway-DB backups are written to.
+	// Back it with a persistent volume. Empty disables backups entirely.
+	BackupsRoot string
+
+	// BackupEnabled / BackupTime / BackupRetention SEED the backup_enabled,
+	// backup_time (HH:MM UTC daily) and backup_retention (keep N) server settings on
+	// first run. Thereafter they are edited live in the admin Server Settings.
+	BackupEnabled   bool
+	BackupTime      string
+	BackupRetention int
 }
 
 // VideoEnabled reports whether live media streaming is configured.
@@ -129,6 +140,10 @@ func Load() Config {
 		FFmpegPath:                 getenv("FFMPEG_PATH", "ffmpeg"),
 		ClipsRoot:                  getenv("CLIPS_ROOT", "/var/lib/gateway/clips"),
 		MediaRetentionDays:         getenvInt("MEDIA_RETENTION_DAYS", 30),
+		BackupsRoot:                getenv("BACKUPS_ROOT", "/var/lib/gateway/backups"),
+		BackupEnabled:              getenvBool("BACKUP_ENABLED", true),
+		BackupTime:                 getenv("BACKUP_TIME", "02:00"),
+		BackupRetention:            getenvInt("BACKUP_RETENTION", 7),
 	}
 }
 

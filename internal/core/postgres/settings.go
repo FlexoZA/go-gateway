@@ -38,6 +38,17 @@ const SettingDeviceRejectUnknown = "device_reject_unknown"
 // Edited live in the admin Server Settings; applied on the next hourly sweep.
 const SettingMediaRetentionDays = "media_retention_days"
 
+// Scheduled gateway-DB backup settings (edited live in the admin Server Settings):
+//
+//	backup_enabled   — "true"/"false": run the daily backup.
+//	backup_time      — "HH:MM" (UTC) daily run time.
+//	backup_retention — keep the newest N archives; older are pruned.
+const (
+	SettingBackupEnabled   = "backup_enabled"
+	SettingBackupTime      = "backup_time"
+	SettingBackupRetention = "backup_retention"
+)
+
 // GetSetting returns a setting's value and whether the row exists.
 func (s *Store) GetSetting(ctx context.Context, key string) (string, bool, error) {
 	var value string

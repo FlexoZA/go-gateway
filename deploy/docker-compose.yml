@@ -60,6 +60,12 @@ services:
       - MEDIA_ADVERTISE_HOST=${MEDIA_ADVERTISE_HOST:-}
       - MEDIA_PORT=${MEDIA_PORT:-33001}
       - CLIPS_ROOT=${CLIPS_ROOT:-/var/lib/gateway/clips}
+      # Scheduled gateway-DB backups (schedule/retention are editable live in the
+      # admin Server Settings; these only seed the defaults on first run).
+      - BACKUPS_ROOT=${BACKUPS_ROOT:-/var/lib/gateway/backups}
+      - BACKUP_ENABLED=${BACKUP_ENABLED:-true}
+      - BACKUP_TIME=${BACKUP_TIME:-02:00}
+      - BACKUP_RETENTION=${BACKUP_RETENTION:-7}
       # Device local-clock offset fallback (a unit's own settings override it, e.g.
       # fleetiger's timezone). 2 for SAST, 0 for UTC.
       - DEVICE_TZ_OFFSET=${DEVICE_TZ_OFFSET:-0}
@@ -67,6 +73,7 @@ services:
       - DEBUG=${DEBUG:-}
     volumes:
       - clipdata:/var/lib/gateway/clips
+      - backupdata:/var/lib/gateway/backups
     ports:
       - "33000:33000"  # howen control
       - "33001:33001"  # howen media
@@ -104,3 +111,4 @@ services:
 volumes:
   pgdata:
   clipdata:
+  backupdata:

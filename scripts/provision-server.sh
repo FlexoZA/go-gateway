@@ -124,12 +124,18 @@ services:
       - MEDIA_ADVERTISE_HOST=${MEDIA_ADVERTISE_HOST:-}
       - MEDIA_PORT=${MEDIA_PORT:-33001}
       - CLIPS_ROOT=${CLIPS_ROOT:-/var/lib/gateway/clips}
+      # Scheduled gateway-DB backups (schedule/retention editable live in the admin).
+      - BACKUPS_ROOT=${BACKUPS_ROOT:-/var/lib/gateway/backups}
+      - BACKUP_ENABLED=${BACKUP_ENABLED:-true}
+      - BACKUP_TIME=${BACKUP_TIME:-02:00}
+      - BACKUP_RETENTION=${BACKUP_RETENTION:-7}
       # Device local-clock offset fallback (a unit's own settings override it).
       - DEVICE_TZ_OFFSET=${DEVICE_TZ_OFFSET:-0}
       # Set DEBUG=1 (or DEBUG=tcp/__UNIT__) for verbose per-frame logging.
       - DEBUG=${DEBUG:-}
     volumes:
       - clipdata:/var/lib/gateway/clips
+      - backupdata:/var/lib/gateway/backups
     ports:
       - "${DEVICE_PORT:-__DEVICE_PORT__}:${DEVICE_PORT:-__DEVICE_PORT__}"  # device control
       - "${MEDIA_PORT:-33001}:${MEDIA_PORT:-33001}"  # media (video units only)
@@ -160,6 +166,7 @@ services:
 volumes:
   pgdata:
   clipdata:
+  backupdata:
 YAML
   echo "wrote deploy/docker-compose.$UNIT.yml"
 fi
