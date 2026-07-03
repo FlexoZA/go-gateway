@@ -185,8 +185,14 @@ type Server struct {
 	streams          StreamLister         // enumerate/stop active live streams; nil when no unit has video
 	ports            PortLister           // device-facing ports to report a listening check for
 	metrics          *metricsSampler      // background host CPU sampler for GET /api/metrics
+	loginSem         chan struct{}        // bounds concurrent bcrypt login verifications (flood guard)
 	srv              *http.Server
 }
+
+// maxConcurrentLogins caps in-flight password verifications. bcrypt is deliberately
+// expensive (~250ms of CPU each), so an unbounded login flood could peg the CPU;
+// beyond this the login endpoint sheds load with 429 instead of spawning more hashes.
+const maxConcurrentLogins = 10
 
 // PortInfo is one device-facing TCP port the gateway listens on.
 type PortInfo struct {
@@ -280,6 +286,7 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		data:        data,
 		hub:         hub,
 		metrics:     newMetricsSampler(),
+		loginSem:    make(chan struct{}, maxConcurrentLogins),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
@@ -476,6 +483,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	// Shed load rather than let a login flood spawn unbounded (expensive) bcrypt
+	// verifications and peg the CPU.
+	select {
+	case s.loginSem <- struct{}{}:
+		defer func() { <-s.loginSem }()
+	default:
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many concurrent login attempts"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
