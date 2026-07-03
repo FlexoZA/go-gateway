@@ -31,7 +31,9 @@ GPS/event **telemetry** is forwarded to the universal-JSON **webhook** — the
 external database that stores all GPS and event data. The gateway's own
 **PostgreSQL** holds only gateway state — the **unit registry** (verifying
 connecting devices), server settings, event mappings, users, API keys, and clip
-metadata; no telemetry is stored there.
+metadata; no telemetry is stored there, apart from a transient **webhook outbox**
+that buffers undelivered messages through an outage/restart and empties as they are
+delivered (see [docs/database.md](docs/database.md)).
 
 **Howen** (GPS + events, OBD/datahub telemetry, live video, recorded clips,
 snapshots, device config & status) is the reference for a full-featured plugin;

@@ -129,8 +129,14 @@ func New(protos ...gateway.Protocol) *App {
 
 	// The webhook is the telemetry sink — it stores all GPS/event data. Its URL is
 	// editable from the admin panel; always wire the sink (it no-ops while empty)
-	// and start from the env value; the stored value is applied below.
-	a.webhookSink = webhook.New(cfg.WebhookURL)
+	// and start from the env value; the stored value is applied below. With a
+	// database, deliveries go through a durable on-DB spool (survives webhook outages
+	// and restarts); without one it falls back to best-effort direct delivery.
+	if a.store != nil {
+		a.webhookSink = webhook.NewWithSpool(webhookSpool{a.store}, log, cfg.WebhookOutboxMax, cfg.WebhookURL)
+	} else {
+		a.webhookSink = webhook.New(cfg.WebhookURL)
+	}
 	baseDeps.Sinks = append(baseDeps.Sinks, a.webhookSink)
 	if a.webhookSink.Enabled() {
 		log.Info(map[string]any{"event": "telemetry_sink", "backend": "webhook"})
@@ -449,9 +455,11 @@ func (a *App) startStoreBackedServices(ctx context.Context) {
 	}
 
 	// Telemetry webhooks: migrate the legacy single URL into the webhooks table on
-	// first run, load the enabled set into the sink, reload instantly on change.
+	// first run, load the enabled set into the sink, reload instantly on change, and
+	// start the durable delivery workers that drain the on-DB outbox.
 	a.seedWebhooks(ctx)
 	a.applyWebhooks(ctx)
+	a.webhookSink.Start(ctx)
 	go a.store.ListenForWebhookChanges(ctx, func(string) { a.applyWebhooks(ctx) })
 
 	// Record each unit's bound port(s) so the panel can flag a pending restart when
@@ -505,6 +513,9 @@ func (a *App) startHTTPAPI(ctx context.Context) {
 		a.log.Info(map[string]any{"event": "internal_token_enabled"})
 	}
 	api.SetPortLister(a) // device-facing port listeners + reachability self-check
+	if a.webhookSink != nil {
+		api.SetTelemetryStats(a.webhookSink.Stats) // webhook backlog/delivered/failed on /api/metrics
+	}
 	if vu := a.anyMedia(); vu != nil {
 		api.SetHLSRoot(a.cfg.HLSRoot)
 		if vu.clips != nil {
@@ -692,6 +703,39 @@ func (a *App) seedWebhooks(ctx context.Context) {
 		a.log.Info(map[string]any{"event": "webhook_seeded", "url": url})
 	}
 }
+
+// webhookSpool adapts *postgres.Store to webhook.Spool, converting the store's
+// OutboxItem rows to the delivery type the sink drains. It keeps the postgres and
+// webhook packages independent (neither imports the other).
+type webhookSpool struct{ s *postgres.Store }
+
+func (w webhookSpool) Enqueue(ctx context.Context, targets []string, body []byte) error {
+	return w.s.EnqueueOutbox(ctx, targets, body)
+}
+
+func (w webhookSpool) ClaimDue(ctx context.Context, limit int, lease time.Duration) ([]webhook.Delivery, error) {
+	items, err := w.s.ClaimOutboxDue(ctx, limit, lease)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webhook.Delivery, len(items))
+	for i, it := range items {
+		out[i] = webhook.Delivery{ID: it.ID, Target: it.Target, Body: it.Body, Attempts: it.Attempts}
+	}
+	return out, nil
+}
+
+func (w webhookSpool) Delete(ctx context.Context, id int64) error { return w.s.DeleteOutbox(ctx, id) }
+
+func (w webhookSpool) Fail(ctx context.Context, id int64, next time.Time, lastErr string) error {
+	return w.s.FailOutbox(ctx, id, next, lastErr)
+}
+
+func (w webhookSpool) Trim(ctx context.Context, max int) (int64, error) {
+	return w.s.TrimOutbox(ctx, max)
+}
+
+func (w webhookSpool) Pending(ctx context.Context) (int64, error) { return w.s.CountOutbox(ctx) }
 
 // applyWebhooks loads the enabled webhook URLs and installs them as the sink's
 // targets.

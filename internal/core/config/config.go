@@ -44,6 +44,13 @@ type Config struct {
 	// timestamps. The JS gateway uses 0 (UTC).
 	WebhookTimezoneOffsetHours float64
 
+	// WebhookOutboxMax caps the durable webhook delivery queue (the on-DB spool that
+	// buffers telemetry through a webhook outage). Beyond it, the OLDEST undelivered
+	// messages are dropped so a long outage can't grow the DB without bound. Applies
+	// only when a database is configured; 0 disables the cap (unbounded). Default
+	// 200000 (~hours of buffering at moderate rates).
+	WebhookOutboxMax int
+
 	// DeviceTZOffsetHours is the device's local-clock offset from UTC (e.g. +2
 	// for SAST). Howen indexes recordings by LOCAL wall-clock, so clip playback
 	// requests (0x4070) must localize the start/end window by this offset or the
@@ -113,6 +120,7 @@ func Load() Config {
 		DatabaseURL:                dbURL,
 		WebhookURL:                 firstNonEmpty(os.Getenv("DEVICE_WEBHOOK_URL"), os.Getenv("WEBHOOK_URL"), os.Getenv("N8N_WEBHOOK_URL")),
 		WebhookTimezoneOffsetHours: getenvFloat("WEBHOOK_TIMEZONE_OFFSET", 0),
+		WebhookOutboxMax:           getenvInt("DEVICE_WEBHOOK_OUTBOX_MAX", 200000),
 		DeviceTZOffsetHours:        getenvFloat("DEVICE_TZ_OFFSET", 0),
 		DeviceAuthMode:             authMode,
 		DeviceRejectUnknown:        getenvBool("DEVICE_REJECT_UNKNOWN", true),
