@@ -15,15 +15,18 @@ package app
 
 import (
 	"context"
+	"io"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/dfm/device-gateway/internal/core/backup"
 	"github.com/dfm/device-gateway/internal/core/config"
 	"github.com/dfm/device-gateway/internal/core/device"
 	"github.com/dfm/device-gateway/internal/core/eventcodes"
@@ -64,6 +67,7 @@ type App struct {
 
 	store       *postgres.Store // may be nil (no database)
 	webhookSink *webhook.Sink   // always wired (no-ops while empty)
+	backups     *backup.Manager // nil unless a database and BACKUPS_ROOT are set
 
 	units []*unitRuntime
 }
@@ -129,13 +133,29 @@ func New(protos ...gateway.Protocol) *App {
 
 	// The webhook is the telemetry sink — it stores all GPS/event data. Its URL is
 	// editable from the admin panel; always wire the sink (it no-ops while empty)
-	// and start from the env value; the stored value is applied below.
-	a.webhookSink = webhook.New(cfg.WebhookURL)
+	// and start from the env value; the stored value is applied below. With a
+	// database, deliveries go through a durable on-DB spool (survives webhook outages
+	// and restarts); without one it falls back to best-effort direct delivery.
+	if a.store != nil {
+		a.webhookSink = webhook.NewWithSpool(webhookSpool{a.store}, log, cfg.WebhookOutboxMax, cfg.WebhookURL)
+	} else {
+		a.webhookSink = webhook.New(cfg.WebhookURL)
+	}
 	baseDeps.Sinks = append(baseDeps.Sinks, a.webhookSink)
 	if a.webhookSink.Enabled() {
 		log.Info(map[string]any{"event": "telemetry_sink", "backend": "webhook"})
 	} else {
 		log.Info(map[string]any{"event": "telemetry_sink_pending", "detail": "no webhook URL yet; set it in Server Settings or DEVICE_WEBHOOK_URL"})
+	}
+
+	// Scheduled gateway-DB backups need the database and a destination directory.
+	if a.store != nil && cfg.BackupsRoot != "" {
+		if mgr, err := backup.NewManager(cfg.BackupsRoot, a.store, log); err != nil {
+			log.Error(map[string]any{"event": "backup_init_failed", "error": err.Error()})
+		} else {
+			a.backups = mgr
+			log.Info(map[string]any{"event": "backups_enabled", "dir": cfg.BackupsRoot})
+		}
 	}
 
 	// Build a runtime per unit type. Each resolves its own admin-editable port.
@@ -449,9 +469,11 @@ func (a *App) startStoreBackedServices(ctx context.Context) {
 	}
 
 	// Telemetry webhooks: migrate the legacy single URL into the webhooks table on
-	// first run, load the enabled set into the sink, reload instantly on change.
+	// first run, load the enabled set into the sink, reload instantly on change, and
+	// start the durable delivery workers that drain the on-DB outbox.
 	a.seedWebhooks(ctx)
 	a.applyWebhooks(ctx)
+	a.webhookSink.Start(ctx)
 	go a.store.ListenForWebhookChanges(ctx, func(string) { a.applyWebhooks(ctx) })
 
 	// Record each unit's bound port(s) so the panel can flag a pending restart when
@@ -481,6 +503,23 @@ func (a *App) startStoreBackedServices(ctx context.Context) {
 	}
 	applyLiveSettings()
 	go a.store.ListenForSettingsChanges(ctx, func(string) { applyLiveSettings() })
+
+	// Media retention: seed the days default on first run, then run a background
+	// reaper that deletes clips/snapshots older than the (live-editable) setting so
+	// the clip bucket can't grow without bound. Only meaningful with a media bucket.
+	if a.cfg.ClipsRoot != "" && a.anyMedia() != nil {
+		if err := a.store.SeedSettingDefault(ctx, postgres.SettingMediaRetentionDays, strconv.Itoa(a.cfg.MediaRetentionDays)); err != nil {
+			a.log.Error(map[string]any{"event": "media_retention_seed_failed", "error": err.Error()})
+		}
+		a.startMediaRetention(ctx)
+	}
+
+	// Scheduled gateway-DB backups: seed the schedule settings on first run and run
+	// the daily backup scheduler. The manager is created in New (needs the store).
+	if a.backups != nil {
+		a.seedBackupSettings(ctx)
+		a.startBackups(ctx)
+	}
 }
 
 // startHTTPAPI builds and runs the management/control HTTP API for every unit.
@@ -505,6 +544,12 @@ func (a *App) startHTTPAPI(ctx context.Context) {
 		a.log.Info(map[string]any{"event": "internal_token_enabled"})
 	}
 	api.SetPortLister(a) // device-facing port listeners + reachability self-check
+	if a.webhookSink != nil {
+		api.SetTelemetryStats(a.webhookSink.Stats) // webhook backlog/delivered/failed on /api/metrics
+	}
+	if a.backups != nil {
+		api.SetBackupService(backupService{a.backups}) // gateway-DB backup list/run/download
+	}
 	if vu := a.anyMedia(); vu != nil {
 		api.SetHLSRoot(a.cfg.HLSRoot)
 		if vu.clips != nil {
@@ -692,6 +737,253 @@ func (a *App) seedWebhooks(ctx context.Context) {
 		a.log.Info(map[string]any{"event": "webhook_seeded", "url": url})
 	}
 }
+
+// mediaRetentionInterval is how often the retention reaper sweeps. A live edit to
+// media_retention_days therefore takes effect on the next sweep (≤ this interval).
+const mediaRetentionInterval = 1 * time.Hour
+
+// startMediaRetention runs a background reaper that deletes clips and snapshots
+// older than the media_retention_days setting, bounding the clip bucket's growth.
+// It sweeps at startup and then every mediaRetentionInterval, reading the (live-
+// editable) retention setting each sweep.
+func (a *App) startMediaRetention(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(mediaRetentionInterval)
+		defer t.Stop()
+		a.reapMedia(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				a.reapMedia(ctx)
+			}
+		}
+	}()
+}
+
+// reapMedia deletes stored clips/snapshots older than the retention window. A
+// setting of 0 (or unset) disables reaping (keep forever).
+func (a *App) reapMedia(ctx context.Context) {
+	days := a.mediaRetentionDays(ctx)
+	if days <= 0 {
+		return
+	}
+	cutoff := time.Now().AddDate(0, 0, -days)
+	clips := a.reapExpired(ctx, cutoff, a.store.DeleteClipsOlderThan)
+	snaps := a.reapExpired(ctx, cutoff, a.store.DeleteSnapshotsOlderThan)
+	if clips+snaps > 0 {
+		a.log.Info(map[string]any{"event": "media_reaped", "clips": clips, "snapshots": snaps, "retention_days": days})
+	}
+}
+
+// reapExpired deletes rows via del in batches, unlinking each returned file path
+// (relative to CLIPS_ROOT), and returns how many were removed.
+func (a *App) reapExpired(ctx context.Context, cutoff time.Time, del func(context.Context, time.Time, int) ([]string, error)) int {
+	const batch = 500
+	total := 0
+	for ctx.Err() == nil {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		paths, err := del(cctx, cutoff, batch)
+		cancel()
+		if err != nil {
+			a.log.Error(map[string]any{"event": "media_reap_failed", "error": err.Error()})
+			return total
+		}
+		for _, p := range paths {
+			if p == "" {
+				continue
+			}
+			if err := os.Remove(filepath.Join(a.cfg.ClipsRoot, filepath.FromSlash(p))); err != nil && !os.IsNotExist(err) {
+				a.log.Debug(map[string]any{"event": "media_file_unlink_failed", "path": p, "error": err.Error()})
+			}
+		}
+		total += len(paths)
+		if len(paths) < batch {
+			break
+		}
+	}
+	return total
+}
+
+// mediaRetentionDays reads the current media_retention_days setting, falling back to
+// the env-seeded default if the row is missing or unparseable.
+func (a *App) mediaRetentionDays(ctx context.Context) int {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	v, ok, err := a.store.GetSetting(cctx, postgres.SettingMediaRetentionDays)
+	if err != nil {
+		a.log.Debug(map[string]any{"event": "media_retention_read_failed", "error": err.Error()})
+		return a.cfg.MediaRetentionDays
+	}
+	if !ok {
+		return a.cfg.MediaRetentionDays
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return a.cfg.MediaRetentionDays
+	}
+	return n
+}
+
+// backupService adapts *backup.Manager to httpapi.BackupService, converting the
+// manager's Info to the API's BackupInfo (RFC3339 timestamps).
+type backupService struct{ m *backup.Manager }
+
+func toBackupInfo(i backup.Info) httpapi.BackupInfo {
+	return httpapi.BackupInfo{Name: i.Name, Size: i.Size, CreatedAt: i.CreatedAt.UTC().Format(time.RFC3339), Rows: i.Rows}
+}
+
+func (b backupService) RunBackup(ctx context.Context) (httpapi.BackupInfo, error) {
+	info, err := b.m.RunBackup(ctx, time.Now())
+	if err != nil {
+		return httpapi.BackupInfo{}, err
+	}
+	return toBackupInfo(info), nil
+}
+
+func (b backupService) ListBackups() ([]httpapi.BackupInfo, error) {
+	list, err := b.m.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]httpapi.BackupInfo, len(list))
+	for i, info := range list {
+		out[i] = toBackupInfo(info)
+	}
+	return out, nil
+}
+
+// webhookSpool adapts *postgres.Store to webhook.Spool, converting the store's
+// OutboxItem rows to the delivery type the sink drains. It keeps the postgres and
+// webhook packages independent (neither imports the other).
+type webhookSpool struct{ s *postgres.Store }
+
+func (w webhookSpool) Enqueue(ctx context.Context, targets []string, body []byte) error {
+	return w.s.EnqueueOutbox(ctx, targets, body)
+}
+
+func (w webhookSpool) ClaimDue(ctx context.Context, limit int, lease time.Duration) ([]webhook.Delivery, error) {
+	items, err := w.s.ClaimOutboxDue(ctx, limit, lease)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webhook.Delivery, len(items))
+	for i, it := range items {
+		out[i] = webhook.Delivery{ID: it.ID, Target: it.Target, Body: it.Body, Attempts: it.Attempts}
+	}
+	return out, nil
+}
+
+func (b backupService) OpenBackup(name string) (io.ReadCloser, int64, error) { return b.m.Open(name) }
+func (b backupService) DeleteBackup(name string) error                       { return b.m.Delete(name) }
+
+// seedBackupSettings seeds the backup schedule settings from env on first run.
+func (a *App) seedBackupSettings(ctx context.Context) {
+	seed := func(key, val string) {
+		if err := a.store.SeedSettingDefault(ctx, key, val); err != nil {
+			a.log.Error(map[string]any{"event": "backup_seed_failed", "key": key, "error": err.Error()})
+		}
+	}
+	seed(postgres.SettingBackupEnabled, strconv.FormatBool(a.cfg.BackupEnabled))
+	seed(postgres.SettingBackupTime, a.cfg.BackupTime)
+	seed(postgres.SettingBackupRetention, strconv.Itoa(a.cfg.BackupRetention))
+}
+
+// startBackups runs the daily backup scheduler: every minute it checks whether
+// backups are enabled and the configured HH:MM (UTC) has arrived, and if so runs one
+// (at most once per day) and prunes to the retention count. Settings are read live,
+// so schedule edits in the admin take effect without a restart.
+func (a *App) startBackups(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		var lastRun string // YYYY-MM-DD of the last completed scheduled run
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				now = now.UTC()
+				if !a.backupSetting(ctx, postgres.SettingBackupEnabled, a.cfg.BackupEnabled) {
+					continue
+				}
+				if now.Format("15:04") != a.backupTime(ctx) {
+					continue
+				}
+				today := now.Format("2006-01-02")
+				if lastRun == today {
+					continue // already ran today
+				}
+				lastRun = today
+				a.runScheduledBackup(ctx)
+			}
+		}
+	}()
+}
+
+func (a *App) runScheduledBackup(ctx context.Context) {
+	bctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	if _, err := a.backups.RunBackup(bctx, time.Now()); err != nil {
+		a.log.Error(map[string]any{"event": "backup_failed", "error": err.Error()})
+		return
+	}
+	keep := a.backupRetention(ctx)
+	if _, err := a.backups.Prune(keep); err != nil {
+		a.log.Error(map[string]any{"event": "backup_prune_failed", "error": err.Error()})
+	}
+}
+
+// backupSetting reads a boolean backup setting, falling back to def.
+func (a *App) backupSetting(ctx context.Context, key string, def bool) bool {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if v, ok, err := a.store.GetSetting(cctx, key); err == nil && ok {
+		return parseBoolSetting(v)
+	}
+	return def
+}
+
+// backupTime reads the configured daily HH:MM (UTC), falling back to the env default.
+func (a *App) backupTime(ctx context.Context) string {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if v, ok, err := a.store.GetSetting(cctx, postgres.SettingBackupTime); err == nil && ok && validHHMM(v) {
+		return strings.TrimSpace(v)
+	}
+	return a.cfg.BackupTime
+}
+
+// backupRetention reads the keep-N retention count, falling back to the env default.
+func (a *App) backupRetention(ctx context.Context) int {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if v, ok, err := a.store.GetSetting(cctx, postgres.SettingBackupRetention); err == nil && ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return a.cfg.BackupRetention
+}
+
+// validHHMM reports whether s is a valid 24-hour HH:MM time.
+func validHHMM(s string) bool {
+	_, err := time.Parse("15:04", strings.TrimSpace(s))
+	return err == nil
+}
+
+func (w webhookSpool) Delete(ctx context.Context, id int64) error { return w.s.DeleteOutbox(ctx, id) }
+
+func (w webhookSpool) Fail(ctx context.Context, id int64, next time.Time, lastErr string) error {
+	return w.s.FailOutbox(ctx, id, next, lastErr)
+}
+
+func (w webhookSpool) Trim(ctx context.Context, max int) (int64, error) {
+	return w.s.TrimOutbox(ctx, max)
+}
+
+func (w webhookSpool) Pending(ctx context.Context) (int64, error) { return w.s.CountOutbox(ctx) }
 
 // applyWebhooks loads the enabled webhook URLs and installs them as the sink's
 // targets.

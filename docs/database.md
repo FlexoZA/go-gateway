@@ -157,3 +157,11 @@ up by hash and honours `is_active` and `expires_at`, so revoke/expiry are instan
 The universal GPS/event message is the external system's responsibility (the
 `DEVICE_WEBHOOK_URL` sink). Keeping telemetry out of this database keeps it small,
 fast, and focused on gateway configuration and verification.
+
+The one exception is the `webhook_outbox` table, which holds telemetry only
+**transiently**: one row per pending POST to the webhook, deleted the instant it is
+delivered. It is a durable delivery buffer — not a store of record — so a webhook
+outage or a gateway restart does not lose GPS/event data in flight. The background
+delivery workers drain it with exponential backoff, and `DEVICE_WEBHOOK_OUTBOX_MAX`
+caps it (dropping the oldest undelivered rows) so a long outage can't grow the DB
+unbounded. In steady state the table is empty.

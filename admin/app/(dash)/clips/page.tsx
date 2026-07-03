@@ -71,6 +71,16 @@ export default function ClipsPage() {
   const MAX_CLIP_SECS = 300; // device cap (matches the old admin)
   const MIN_CLIP_SECS = 5;
 
+  // Switching device must discard the previous device's recordings/trim state —
+  // otherwise a "Pull" would post the old device's time window to the new device.
+  function changeSerial(next: string) {
+    setSerial(next);
+    setRecordings(null);
+    setTrimKey(null);
+    setError(null);
+    setNotice(null);
+  }
+
   function recKey(rec: Recording) {
     return `${rec.start_utc}-${rec.end_utc}`;
   }
@@ -206,7 +216,7 @@ export default function ClipsPage() {
         <div className="flex flex-wrap items-end gap-3">
           <div>
             <label className="text-xs text-slate-400">Device</label>
-            <select className="input mt-1 w-52" value={effectiveSerial} onChange={(e) => setSerial(e.target.value)} disabled={searching}>
+            <select className="input mt-1 w-52" value={effectiveSerial} onChange={(e) => changeSerial(e.target.value)} disabled={searching}>
               {unitList.length === 0 && <option value="">No connected devices</option>}
               {unitList.map((u) => (
                 <option key={u.serial} value={u.serial}>{u.serial} ({u.model})</option>

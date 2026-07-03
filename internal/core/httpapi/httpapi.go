@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -94,6 +95,10 @@ const (
 	settingDevicePort          = "device_port"
 	settingGatewayName         = "gateway_name"
 	settingDeviceRejectUnknown = "device_reject_unknown"
+	settingMediaRetentionDays  = "media_retention_days"
+	settingBackupEnabled       = "backup_enabled"
+	settingBackupTime          = "backup_time"
+	settingBackupRetention     = "backup_retention"
 )
 
 // errNotFound mirrors postgres.ErrNotFound without importing it (the store
@@ -181,11 +186,36 @@ type Server struct {
 	internalToken    string
 	hlsRoot          string
 	clipsRoot        string
-	playlistObserver func(relPath string) // notified when a viewer fetches an HLS playlist
-	streams          StreamLister         // enumerate/stop active live streams; nil when no unit has video
-	ports            PortLister           // device-facing ports to report a listening check for
-	metrics          *metricsSampler      // background host CPU sampler for GET /api/metrics
+	playlistObserver func(relPath string)                 // notified when a viewer fetches an HLS playlist
+	streams          StreamLister                         // enumerate/stop active live streams; nil when no unit has video
+	ports            PortLister                           // device-facing ports to report a listening check for
+	metrics          *metricsSampler                      // background host CPU sampler for GET /api/metrics
+	telemetryStats   func(context.Context) map[string]any // webhook delivery stats for GET /api/metrics; nil when unset
+	backups          BackupService                        // gateway-DB backup list/run/download; nil when unset
+	loginSem         chan struct{}                        // bounds concurrent bcrypt login verifications (flood guard)
 	srv              *http.Server
+}
+
+// maxConcurrentLogins caps in-flight password verifications. bcrypt is deliberately
+// expensive (~250ms of CPU each), so an unbounded login flood could peg the CPU;
+// beyond this the login endpoint sheds load with 429 instead of spawning more hashes.
+const maxConcurrentLogins = 10
+
+// BackupInfo describes one gateway-DB backup archive for the admin API.
+type BackupInfo struct {
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	CreatedAt string `json:"created_at"`
+	Rows      int64  `json:"rows,omitempty"`
+}
+
+// BackupService runs, lists, serves, and deletes gateway-DB backups. The app
+// implements it via the backup manager. Nil disables the /api/backups routes.
+type BackupService interface {
+	RunBackup(ctx context.Context) (BackupInfo, error)
+	ListBackups() ([]BackupInfo, error)
+	OpenBackup(name string) (io.ReadCloser, int64, error)
+	DeleteBackup(name string) error
 }
 
 // PortInfo is one device-facing TCP port the gateway listens on.
@@ -261,6 +291,14 @@ func (s *Server) SetStreamLister(l StreamLister) { s.streams = l }
 // SetPortLister wires the device-facing port list reported by GET /api/ports.
 func (s *Server) SetPortLister(l PortLister) { s.ports = l }
 
+// SetTelemetryStats wires a provider of webhook delivery stats (backlog, delivered,
+// failed, dropped) reported under "telemetry" by GET /api/metrics. Nil = omitted.
+func (s *Server) SetTelemetryStats(fn func(context.Context) map[string]any) { s.telemetryStats = fn }
+
+// SetBackupService wires the gateway-DB backup manager (run/list/download/delete).
+// Nil leaves the /api/backups routes responding 503.
+func (s *Server) SetBackupService(b BackupService) { s.backups = b }
+
 // New builds the API server. units are the hosted unit types (name + effective
 // capabilities + optional settings schema); the first is the back-compat default
 // for unit-scoped routes that omit a unit. If verifier is nil, protected routes
@@ -280,6 +318,7 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		data:        data,
 		hub:         hub,
 		metrics:     newMetricsSampler(),
+		loginSem:    make(chan struct{}, maxConcurrentLogins),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
@@ -380,6 +419,12 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		// admin hides it). Applies live; can't enable an unsupported feature.
 		"PUT /api/unit-types/{unit}/capabilities": s.handleSetCapabilities,
 
+		// Gateway-DB backups: list, run on demand, download, delete.
+		"GET /api/backups":                 s.handleListBackups,
+		"POST /api/backups":                s.handleRunBackup,
+		"GET /api/backups/{name}/download": s.handleDownloadBackup,
+		"DELETE /api/backups/{name}":       s.handleDeleteBackup,
+
 		// Telemetry webhooks (the GPS/event data sinks).
 		"GET /api/webhooks":         s.handleListWebhooks,
 		"POST /api/webhooks":        s.handleCreateWebhook,
@@ -476,6 +521,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	// Shed load rather than let a login flood spawn unbounded (expensive) bcrypt
+	// verifications and peg the CPU.
+	select {
+	case s.loginSem <- struct{}{}:
+		defer func() { <-s.loginSem }()
+	default:
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many concurrent login attempts"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -1884,6 +1938,28 @@ func (s *Server) handleSetSetting(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "device_reject_unknown must be true or false"})
 		return
 	}
+	if key == settingMediaRetentionDays {
+		if n, err := strconv.Atoi(strings.TrimSpace(body.Value)); err != nil || n < 0 || n > 3650 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "media_retention_days must be a whole number of days between 0 (keep forever) and 3650"})
+			return
+		}
+	}
+	if key == settingBackupEnabled && !validBool(body.Value) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "backup_enabled must be true or false"})
+		return
+	}
+	if key == settingBackupTime {
+		if _, err := time.Parse("15:04", strings.TrimSpace(body.Value)); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "backup_time must be a 24-hour time HH:MM (UTC)"})
+			return
+		}
+	}
+	if key == settingBackupRetention {
+		if n, err := strconv.Atoi(strings.TrimSpace(body.Value)); err != nil || n < 1 || n > 3650 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "backup_retention must be a whole number between 1 and 3650"})
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := s.data.SetSetting(ctx, key, body.Value); err != nil {
@@ -2166,6 +2242,73 @@ func validHTTPURL(v string) bool {
 }
 
 // GET /api/webhooks — all telemetry webhooks.
+// backupsReady reports 503 when no backup service is wired (no DB / BACKUPS_ROOT).
+func (s *Server) backupsReady(w http.ResponseWriter) bool {
+	if s.backups == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "backups not configured"})
+		return false
+	}
+	return true
+}
+
+// GET /api/backups — list existing gateway-DB backup archives, newest first.
+func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
+	if !s.backupsReady(w) {
+		return
+	}
+	list, err := s.backups.ListBackups()
+	if err != nil {
+		s.dataError(w, "list_backups", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backups": list})
+}
+
+// POST /api/backups — run a backup now and return its info.
+func (s *Server) handleRunBackup(w http.ResponseWriter, r *http.Request) {
+	if !s.backupsReady(w) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	info, err := s.backups.RunBackup(ctx)
+	if err != nil {
+		s.dataError(w, "run_backup", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backup": info})
+}
+
+// GET /api/backups/{name}/download — stream a backup archive.
+func (s *Server) handleDownloadBackup(w http.ResponseWriter, r *http.Request) {
+	if !s.backupsReady(w) {
+		return
+	}
+	name := r.PathValue("name")
+	rc, size, err := s.backups.OpenBackup(name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "backup not found"})
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(name)))
+	_, _ = io.Copy(w, rc)
+}
+
+// DELETE /api/backups/{name} — delete a backup archive.
+func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
+	if !s.backupsReady(w) {
+		return
+	}
+	if err := s.backups.DeleteBackup(r.PathValue("name")); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "backup not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 	if !s.dataReady(w) {
 		return

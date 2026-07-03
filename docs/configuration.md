@@ -16,16 +16,22 @@ applied in `internal/core/config`.
 | `HTTP_PORT` | `8080` | Management/control HTTP API port; `0` disables the API |
 | `INTERNAL_API_TOKEN` | _(empty)_ | Shared secret the admin panel uses to authenticate (accepted as a Bearer alongside DB keys). Lets the panel work before any key exists → first-run setup. Set the same value as the admin's `GATEWAY_API_TOKEN` (compose: both from `ADMIN_API_TOKEN`) |
 | `DEVICE_WEBHOOK_URL` | _(empty)_ | Telemetry sink — universal-JSON endpoint that stores all GPS/event data. **Seeds the first `webhooks` row on first run** (with a database, manage one or more webhooks live in the admin panel → Server Settings, each enable/disable). Aliases: `WEBHOOK_URL`, `N8N_WEBHOOK_URL` |
+| `DEVICE_WEBHOOK_OUTBOX_MAX` | `200000` | Caps the durable on-DB webhook outbox that buffers telemetry through a webhook outage/restart. Beyond it the oldest undelivered messages are dropped so a long outage can't grow the DB unbounded. `0` = uncapped. Applies only with a database; no-DB builds fall back to best-effort direct delivery. |
 | `WEBHOOK_TIMEZONE_OFFSET` | `0` | Hours offset embedded in message timestamps |
 | `DEVICE_TZ_OFFSET` | `0` | The device's local-clock offset from UTC (e.g. `2` for SAST). Howen units index SD recordings by **local wall-clock**, so the gateway uses this to localise clip/recording windows (`0x4070`/`0x4060`); clip times stay true-UTC in the API and DB. Wrong value → "related file does not exist" (err=6) |
 | `DATABASE_URL` | _(empty)_ | PostgreSQL DSN for the gateway's own DB (device registry, mappings, users, API keys). Alias: `POSTGRES_URL` |
 | `DEVICE_AUTH_MODE` | `postgres` if `DATABASE_URL` set, else `allow_all` | `allow_all` or `postgres` |
 | `DEVICE_REJECT_UNKNOWN` | `true` | In `postgres` mode, reject serials not already in `devices` until approved (secure by default; set `false` to auto-provision + admit). **Seeds the `device_reject_unknown` setting on first run**; toggle it live in the panel (Server Settings → Device authorization) |
 | `MAPPING_REFRESH_SECONDS` | `60` | Safety-net reload interval for event mappings (edits already apply instantly via `NOTIFY`; `0` disables the net) |
+| `MAX_CONNECTIONS` | `20000` | Cap on concurrent device connections **per listener** (unit type); over it, new connections are dropped so a socket flood can't exhaust memory/fds and take down co-hosted units. `0` = unlimited. Keep the process file-descriptor limit (`ulimit -n`) above this. |
+| `MAX_CONNECTIONS_PER_IP` | `0` (off) | Cap on concurrent connections from a single source IP. Off by default because IoT/GPS fleets often share a carrier-NAT IP; enable only when devices have distinct addresses. |
 | `MEDIA_PORT` | `33001` | Device **media** TCP port (video frames), separate from the `LISTEN_PORT` control channel |
 | `MEDIA_ADVERTISE_HOST` | _(empty)_ | Host (no port) the device dials back for media, embedded in the live-preview command. **Empty disables video** — live streaming, recordings query, and clips all return `503`/`404` until set |
 | `HLS_ROOT` | `/tmp/hls` | Directory where ffmpeg writes HLS playlists/segments for live streams |
 | `CLIPS_ROOT` | `/var/lib/gateway/clips` | Directory where pulled `.mp4` clip files **and** saved snapshot JPEGs (under `snapshots/`) are stored (the server-side "bucket"). Back this with a persistent volume |
+| `MEDIA_RETENTION_DAYS` | `30` | **Seeds** the `media_retention_days` server setting on first run: how long stored clips/snapshots are kept before an hourly reaper deletes them (files + rows). `0` = keep forever. Thereafter edit it live in the admin (Server Settings → Clip & snapshot retention); this env value only sets the initial default |
+| `BACKUPS_ROOT` | `/var/lib/gateway/backups` | Directory scheduled gateway-DB backups are written to (persist this volume). Empty disables backups |
+| `BACKUP_ENABLED` / `BACKUP_TIME` / `BACKUP_RETENTION` | `true` / `02:00` / `7` | **Seed** the backup schedule settings on first run: whether the daily backup runs, its HH:MM (UTC) time, and how many archives to keep. Thereafter edit live in the admin (Server Settings → Database backups). Restore with `cmd/backup restore` (see below) |
 | `FFMPEG_PATH` | `ffmpeg` | Path to the ffmpeg binary used to mux HLS and clips |
 | `DEBUG` | _(empty)_ | `1`/`true`/`*` for all debug logs, or a namespace like `tcp/howen`, `http` |
 
@@ -85,6 +91,22 @@ make apikey ARGS='create --name frontend'
 make apikey ARGS='list'
 make apikey ARGS='revoke --prefix dgw_AbCd'
 ```
+
+### Backups — `cmd/backup`
+The gateway takes scheduled database backups on its own (Server Settings → Database
+backups; written to `BACKUPS_ROOT`). `cmd/backup` is the manual/restore counterpart —
+it dumps or restores the gateway DB (registry, users, keys, mappings, settings, clip
+metadata; **not** telemetry). Because the gateway owns its schema (recreated on boot),
+this is a logical row dump, no `pg_dump` needed.
+
+```bash
+go run ./cmd/backup dump  --out gateway-backup.tar.gz   # or to stdout
+go run ./cmd/backup restore --in gateway-backup.tar.gz --yes   # DESTRUCTIVE: truncates + reloads
+```
+
+Restore into a database whose schema already exists (start the gateway once, then
+restore). A backup downloaded from the admin is the same archive and restores the
+same way.
 
 ### New unit type — `scripts/new-gateway.sh`
 Scaffold a new unit type's **code** from the GPS-only template (a developer task,

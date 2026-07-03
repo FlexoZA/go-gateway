@@ -2,12 +2,19 @@
 
 import { useEffect, useState } from "react";
 import { useConfirm } from "@/components/confirm";
-import { api } from "@/lib/api";
+import { api, apiBinary } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 
 type Webhook = { id: number; name: string; url: string; is_enabled: boolean; updated_at: string };
 type Setting = { key: string; value: string; updated_at: string };
+type Backup = { name: string; size: number; created_at: string; rows?: number };
+
+function fmtBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export default function ServerSettingsPage() {
   const { data, error, loading, refresh } = useFetch<{ webhooks: Webhook[] }>("webhooks");
@@ -57,6 +64,20 @@ export default function ServerSettingsPage() {
       <div className="mb-8 max-w-3xl space-y-4">
         <GatewayNameCard current={settingVal("gateway_name")} onSaved={settings.refresh} />
         <DeviceAuthCard current={settingVal("device_reject_unknown")} onSaved={settings.refresh} />
+        {/* Only shown on a gateway that stores clips/snapshots (the setting is
+            seeded only then). */}
+        {settings.data?.settings.some((s) => s.key === "media_retention_days") && (
+          <MediaRetentionCard current={settingVal("media_retention_days")} onSaved={settings.refresh} />
+        )}
+        {/* Only shown when scheduled backups are configured (setting seeded). */}
+        {settings.data?.settings.some((s) => s.key === "backup_enabled") && (
+          <BackupsCard
+            enabled={settingVal("backup_enabled")}
+            time={settingVal("backup_time")}
+            retention={settingVal("backup_retention")}
+            onSaved={settings.refresh}
+          />
+        )}
       </div>
 
       <div className="max-w-3xl space-y-4">
@@ -204,6 +225,246 @@ function DeviceAuthCard({ current, onSaved }: { current: string; onSaved: () => 
           ? "On (default) — unknown serials are quarantined and rejected until you approve them on the Devices page."
           : "Off — unknown serials are auto-registered and admitted immediately."}
       </p>
+    </div>
+  );
+}
+
+function BackupsCard({
+  enabled,
+  time,
+  retention,
+  onSaved,
+}: {
+  enabled: string;
+  time: string;
+  retention: string;
+  onSaved: () => void;
+}) {
+  const backups = useFetch<{ backups: Backup[] }>("backups");
+  const confirm = useConfirm();
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [running, setRunning] = useState(false);
+
+  const isOn = ["true", "1", "yes", "on"].includes(enabled.trim().toLowerCase());
+  const [timeVal, setTimeVal] = useState(time);
+  const [retVal, setRetVal] = useState(retention);
+  useEffect(() => setTimeVal(time), [time]);
+  useEffect(() => setRetVal(retention), [retention]);
+  const scheduleDirty = timeVal !== time || retVal !== retention;
+  const retValid = Number.isInteger(Number(retVal)) && Number(retVal) >= 1 && Number(retVal) <= 3650;
+
+  async function setSetting(key: string, value: string) {
+    await api("settings", { method: "PUT", body: JSON.stringify({ key, value }) });
+    onSaved();
+  }
+
+  async function toggle(v: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      await setSetting("backup_enabled", v ? "true" : "false");
+    } catch (e: any) {
+      setError(e.message || "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveSchedule() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (timeVal !== time) await setSetting("backup_time", timeVal);
+      if (retVal !== retention) await setSetting("backup_retention", String(Number(retVal)));
+    } catch (e: any) {
+      setError(e.message || "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runNow() {
+    setRunning(true);
+    setError(null);
+    try {
+      await api("backups", { method: "POST" });
+      await backups.refresh();
+    } catch (e: any) {
+      setError(e.message || "Backup failed");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function download(name: string) {
+    setError(null);
+    try {
+      const blob = await apiBinary(`backups/${encodeURIComponent(name)}/download`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setError(e.message || "Download failed");
+    }
+  }
+
+  async function del(name: string) {
+    if (!(await confirm({ title: "Delete backup?", body: name, confirmLabel: "Delete" }))) return;
+    setError(null);
+    try {
+      await api(`backups/${encodeURIComponent(name)}`, { method: "DELETE" });
+      await backups.refresh();
+    } catch (e: any) {
+      setError(e.message || "Delete failed");
+    }
+  }
+
+  const list = backups.data?.backups ?? [];
+
+  return (
+    <div className="card space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold text-white">Database backups</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Scheduled snapshots of the gateway database (device registry, users, API keys, mappings, settings, clip metadata —
+          not telemetry). Stored on the server; download them to keep off-box copies.
+        </p>
+      </div>
+
+      {error && <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</div>}
+
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-edge bg-ink px-3 py-2">
+        <span className="text-sm text-slate-200">Run a daily backup</span>
+        <input type="checkbox" checked={isOn} disabled={busy} onChange={(e) => toggle(e.target.checked)} />
+      </label>
+
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="w-32">
+          <label className="text-xs text-slate-400">Daily time (UTC)</label>
+          <input className="input mt-1" type="time" value={timeVal} onChange={(e) => setTimeVal(e.target.value)} disabled={!isOn} />
+        </div>
+        <div className="w-32">
+          <label className="text-xs text-slate-400">Keep last</label>
+          <input
+            className="input mt-1"
+            type="number"
+            min={1}
+            max={3650}
+            step={1}
+            value={retVal}
+            onChange={(e) => setRetVal(e.target.value)}
+          />
+        </div>
+        <button className="btn-primary" onClick={saveSchedule} disabled={!scheduleDirty || busy || !retValid}>
+          Save schedule
+        </button>
+        <button className="btn-ghost ml-auto" onClick={runNow} disabled={running}>
+          {running ? "Backing up…" : "Back up now"}
+        </button>
+      </div>
+
+      <div>
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Available backups</div>
+        {backups.loading ? (
+          <Spinner />
+        ) : list.length === 0 ? (
+          <Empty>No backups yet.</Empty>
+        ) : (
+          <ul className="divide-y divide-edge rounded-md border border-edge">
+            {list.map((b) => (
+              <li key={b.name} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-xs text-slate-300">{b.name}</div>
+                  <div className="text-xs text-slate-500">
+                    {new Date(b.created_at).toLocaleString()} · {fmtBytes(b.size)}
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button className="btn-ghost" onClick={() => download(b.name)}>
+                    Download
+                  </button>
+                  <button className="btn-danger" onClick={() => del(b.name)}>
+                    Delete
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MediaRetentionCard({ current, onSaved }: { current: string; onSaved: () => void }) {
+  const [value, setValue] = useState(current);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setValue(current);
+  }, [current]);
+
+  const dirty = value.trim() !== current.trim();
+  const days = Number(value);
+  const valid = Number.isInteger(days) && days >= 0 && days <= 3650;
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await api("settings", { method: "PUT", body: JSON.stringify({ key: "media_retention_days", value: String(days) }) });
+      setSaved(true);
+      onSaved();
+    } catch (e: any) {
+      setError(e.message || "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-white">Clip &amp; snapshot retention</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          How long stored clips and snapshots are kept on the server before they’re automatically deleted. Set{" "}
+          <span className="font-mono text-slate-200">0</span> to keep them forever. Cleanup runs hourly.
+        </p>
+      </div>
+
+      {error && <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</div>}
+      {saved && !dirty && (
+        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">Saved.</div>
+      )}
+
+      <div className="flex items-end gap-3">
+        <div className="w-40">
+          <label className="text-xs text-slate-400">Retention (days)</label>
+          <input
+            className="input mt-1"
+            type="number"
+            min={0}
+            max={3650}
+            step={1}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+        </div>
+        <button className="btn-primary" onClick={save} disabled={!dirty || busy || !valid}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {!valid && <p className="text-xs text-rose-300">Enter a whole number of days between 0 and 3650.</p>}
+      {valid && days === 0 && <p className="text-xs text-amber-300">Keeping clips forever — watch disk usage.</p>}
     </div>
   );
 }

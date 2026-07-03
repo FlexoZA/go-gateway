@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -131,6 +132,33 @@ func (s *Store) DeleteClip(ctx context.Context, id int64) (string, error) {
 		return "", fmt.Errorf("delete clip: %w", err)
 	}
 	return path, nil
+}
+
+// DeleteClipsOlderThan deletes up to limit clip rows created before cutoff and
+// returns their storage paths so the caller can unlink the .mp4 files. Batched (via
+// limit) so a large backlog is reaped in chunks rather than one giant statement.
+func (s *Store) DeleteClipsOlderThan(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.pool.Query(ctx,
+		`DELETE FROM clips WHERE id IN (
+		    SELECT id FROM clips WHERE created_at < $1 ORDER BY id LIMIT $2
+		 ) RETURNING storage_path`,
+		cutoff, limit)
+	if err != nil {
+		return nil, fmt.Errorf("delete old clips: %w", err)
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
 }
 
 // scanClip reads a clips row (column order must match the SELECTs above).

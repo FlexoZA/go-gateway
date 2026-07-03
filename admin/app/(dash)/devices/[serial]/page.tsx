@@ -32,8 +32,13 @@ export default function DeviceDetailPage({ params }: { params: { serial: string 
   const status = useFetch<StatusResp>(`units/${encodeURIComponent(serial)}/status`, 5000);
   const devices = useFetch<{ devices: Device[] }>("devices", 15000);
 
-  const conn = status.data?.connection;
-  const tele = status.data?.telemetry;
+  // The status endpoint 404s (→ status.error) the moment the device disconnects.
+  // Ignore any last-successful body while the latest poll is failing, otherwise a
+  // dead device would keep reporting "online" from stale data. On error we fall
+  // back to the registry status below.
+  const live = status.error ? undefined : status.data;
+  const conn = live?.connection;
+  const tele = live?.telemetry;
   const reg = devices.data?.devices?.find((d) => d.serial === serial);
   const online = !!conn;
   const sleeping = conn?.state === "sleep";

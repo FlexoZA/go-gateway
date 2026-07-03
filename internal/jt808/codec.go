@@ -24,6 +24,13 @@ const (
 	// maxFrameBytes guards an unescaped control frame. Control messages are small;
 	// the big ULV video frames arrive on the separate media port, not here.
 	maxFrameBytes = 64 * 1024
+
+	// maxReasmBytes caps the aggregate size of a subpackaged message held mid-
+	// reassembly. Fragments are device-controlled: a peer can advertise SubTotal
+	// up to 0xFFFF and dribble ~64 KiB per fragment, so without an aggregate cap
+	// a single unauthenticated session can buffer gigabytes. 8 MiB comfortably
+	// covers real config replies and snapshot JPEGs while bounding the exposure.
+	maxReasmBytes = 8 * 1024 * 1024
 )
 
 // Inbound (terminal -> platform) message IDs.

@@ -44,6 +44,13 @@ type Config struct {
 	// timestamps. The JS gateway uses 0 (UTC).
 	WebhookTimezoneOffsetHours float64
 
+	// WebhookOutboxMax caps the durable webhook delivery queue (the on-DB spool that
+	// buffers telemetry through a webhook outage). Beyond it, the OLDEST undelivered
+	// messages are dropped so a long outage can't grow the DB without bound. Applies
+	// only when a database is configured; 0 disables the cap (unbounded). Default
+	// 200000 (~hours of buffering at moderate rates).
+	WebhookOutboxMax int
+
 	// DeviceTZOffsetHours is the device's local-clock offset from UTC (e.g. +2
 	// for SAST). Howen indexes recordings by LOCAL wall-clock, so clip playback
 	// requests (0x4070) must localize the start/end window by this offset or the
@@ -67,6 +74,17 @@ type Config struct {
 	// still loaded once at startup). Default 60.
 	MappingRefreshSeconds int
 
+	// MaxConnections caps concurrent device connections PER LISTENER (unit type), so
+	// a flood of sockets can't exhaust memory/file descriptors and take down every
+	// co-hosted unit. Over the cap, new connections are dropped. 0 = unlimited.
+	// Default 20000. Ensure the process file-descriptor limit (ulimit -n) exceeds it.
+	MaxConnections int
+
+	// MaxConnectionsPerIP caps concurrent connections from a single source IP.
+	// Default 0 (disabled) because IoT/GPS fleets often share a carrier-NAT IP;
+	// enable it only when devices have distinct addresses.
+	MaxConnectionsPerIP int
+
 	// --- Video / live media (HLS) ---
 
 	// MediaPort is the TCP port devices connect to for media (video) frames,
@@ -87,6 +105,23 @@ type Config struct {
 	// ClipsRoot is the directory (the "bucket") where recorded clip .mp4 files
 	// are stored on the server. Should be a persistent volume.
 	ClipsRoot string
+
+	// MediaRetentionDays SEEDS the media_retention_days server setting on first run:
+	// how many days stored clips and snapshots are kept before the retention reaper
+	// deletes them. 0 = keep forever. Thereafter it is edited live in the admin
+	// Server Settings; this env value only sets the initial default. Default 30.
+	MediaRetentionDays int
+
+	// BackupsRoot is the directory scheduled gateway-DB backups are written to.
+	// Back it with a persistent volume. Empty disables backups entirely.
+	BackupsRoot string
+
+	// BackupEnabled / BackupTime / BackupRetention SEED the backup_enabled,
+	// backup_time (HH:MM UTC daily) and backup_retention (keep N) server settings on
+	// first run. Thereafter they are edited live in the admin Server Settings.
+	BackupEnabled   bool
+	BackupTime      string
+	BackupRetention int
 }
 
 // VideoEnabled reports whether live media streaming is configured.
@@ -113,15 +148,23 @@ func Load() Config {
 		DatabaseURL:                dbURL,
 		WebhookURL:                 firstNonEmpty(os.Getenv("DEVICE_WEBHOOK_URL"), os.Getenv("WEBHOOK_URL"), os.Getenv("N8N_WEBHOOK_URL")),
 		WebhookTimezoneOffsetHours: getenvFloat("WEBHOOK_TIMEZONE_OFFSET", 0),
+		WebhookOutboxMax:           getenvInt("DEVICE_WEBHOOK_OUTBOX_MAX", 200000),
 		DeviceTZOffsetHours:        getenvFloat("DEVICE_TZ_OFFSET", 0),
 		DeviceAuthMode:             authMode,
 		DeviceRejectUnknown:        getenvBool("DEVICE_REJECT_UNKNOWN", true),
 		MappingRefreshSeconds:      getenvInt("MAPPING_REFRESH_SECONDS", 60),
+		MaxConnections:             getenvInt("MAX_CONNECTIONS", 20000),
+		MaxConnectionsPerIP:        getenvInt("MAX_CONNECTIONS_PER_IP", 0),
 		MediaPort:                  getenvInt("MEDIA_PORT", 33001),
 		MediaAdvertiseHost:         os.Getenv("MEDIA_ADVERTISE_HOST"),
 		HLSRoot:                    getenv("HLS_ROOT", "/tmp/hls"),
 		FFmpegPath:                 getenv("FFMPEG_PATH", "ffmpeg"),
 		ClipsRoot:                  getenv("CLIPS_ROOT", "/var/lib/gateway/clips"),
+		MediaRetentionDays:         getenvInt("MEDIA_RETENTION_DAYS", 30),
+		BackupsRoot:                getenv("BACKUPS_ROOT", "/var/lib/gateway/backups"),
+		BackupEnabled:              getenvBool("BACKUP_ENABLED", true),
+		BackupTime:                 getenv("BACKUP_TIME", "02:00"),
+		BackupRetention:            getenvInt("BACKUP_RETENTION", 7),
 	}
 }
 

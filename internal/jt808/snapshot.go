@@ -19,6 +19,7 @@ import (
 // multimediaReasm reassembles a subpackaged 0x0801 upload.
 type multimediaReasm struct {
 	total uint16
+	bytes int // aggregate size of buffered fragments, bounded by maxReasmBytes
 	parts map[uint16][]byte
 }
 
@@ -135,16 +136,30 @@ func (s *session) reassembleMultimedia(h header, body []byte) ([]byte, bool) {
 	if !h.Subpackage || h.SubTotal <= 1 {
 		return body, true
 	}
+	// SubIndex is 1-based and must fall within the advertised total; fragment count
+	// and size are device-controlled, so the aggregate is capped at maxReasmBytes.
+	if h.SubIndex < 1 || h.SubIndex > h.SubTotal {
+		return nil, false
+	}
 	s.snapMu.Lock()
 	defer s.snapMu.Unlock()
 	if s.snapReasm == nil || s.snapReasm.total != h.SubTotal || h.SubIndex == 1 {
 		s.snapReasm = &multimediaReasm{total: h.SubTotal, parts: map[uint16][]byte{}}
 	}
+	if prev, ok := s.snapReasm.parts[h.SubIndex]; ok {
+		s.snapReasm.bytes -= len(prev) // a resent fragment replaces the old one
+	}
+	if s.snapReasm.bytes+len(body) > maxReasmBytes {
+		s.snapReasm = nil
+		s.log().Debug(map[string]any{"event": "multimedia_oversize", "serial": s.serial, "total": h.SubTotal})
+		return nil, false
+	}
 	s.snapReasm.parts[h.SubIndex] = append([]byte(nil), body...)
+	s.snapReasm.bytes += len(body)
 	if len(s.snapReasm.parts) < int(h.SubTotal) {
 		return nil, false
 	}
-	var full []byte
+	full := make([]byte, 0, s.snapReasm.bytes)
 	for i := uint16(1); i <= h.SubTotal; i++ {
 		full = append(full, s.snapReasm.parts[i]...)
 	}

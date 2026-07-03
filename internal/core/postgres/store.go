@@ -249,6 +249,19 @@ var schema = []string{
 		created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`,
 	`CREATE INDEX IF NOT EXISTS snapshots_serial_created_idx ON snapshots (serial, created_at DESC)`,
+	// Durable webhook delivery queue. Holds telemetry only transiently — one row per
+	// pending POST to an external endpoint, deleted on delivery — so a webhook outage
+	// or a gateway restart does not lose GPS/event data in flight. See outbox.go.
+	`CREATE TABLE IF NOT EXISTS webhook_outbox (
+		id              BIGSERIAL PRIMARY KEY,
+		target          TEXT NOT NULL,
+		body            BYTEA NOT NULL,
+		attempts        INT NOT NULL DEFAULT 0,
+		last_error      TEXT NOT NULL DEFAULT '',
+		created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+		next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now()
+	)`,
+	`CREATE INDEX IF NOT EXISTS webhook_outbox_due ON webhook_outbox (next_attempt_at)`,
 	// One-time migration: the JT808 plugin was split into make/model unit types
 	// (each vendor/model on its own port), so the original generic "jt808" unit
 	// became "dfm-n62" (the unbranded N62 group). Rename its rows across the device
