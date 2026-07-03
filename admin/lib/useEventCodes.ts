@@ -18,11 +18,19 @@ function load(force = false): Promise<EventCode[]> {
     cache = null;
     inflight = null;
   }
-  inflight ??= api<{ event_codes: EventCode[] }>("event-codes").then((d) => {
-    cache = d.event_codes ?? [];
-    listeners.forEach((l) => l());
-    return cache;
-  });
+  inflight ??= api<{ event_codes: EventCode[] }>("event-codes")
+    .then((d) => {
+      cache = d.event_codes ?? [];
+      listeners.forEach((l) => l());
+      return cache;
+    })
+    .catch((e) => {
+      // Don't cache a rejected promise: clear inflight so a transient failure at
+      // mount (gateway restart/blip) can be retried instead of permanently leaving
+      // every dropdown empty until a full page reload.
+      inflight = null;
+      throw e;
+    });
   return inflight;
 }
 

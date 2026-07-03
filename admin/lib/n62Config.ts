@@ -836,12 +836,19 @@ export function splitListCsv(seg: string, obj: Record<string, any>): Record<stri
     const parts = String(sub[spec.csv.field] ?? "").split(",");
     const nsub = { ...sub };
     spec.csv.cols.forEach((c, i) => (nsub[c.key] = parts[i] ?? ""));
+    // Preserve any trailing columns the firmware packed beyond the curated set so
+    // they can be re-appended on save instead of being silently dropped.
+    if (parts.length > spec.csv.cols.length) nsub.__csvExtra = parts.slice(spec.csv.cols.length);
     out[s.key] = nsub;
   }
   return out;
 }
 
-// joinListCsv rebuilds a sub's CSV string from its virtual columns (order matters).
+// joinListCsv rebuilds a sub's CSV string from its virtual columns (order matters),
+// re-appending any trailing columns the firmware sent beyond the curated set (kept
+// by splitListCsv) so a round-trip doesn't truncate them.
 export function joinListCsv(spec: ListSpec, sub: Record<string, any>): string {
-  return spec.csv!.cols.map((c) => String(sub[c.key] ?? "")).join(",");
+  const base = spec.csv!.cols.map((c) => String(sub[c.key] ?? ""));
+  const extra = Array.isArray(sub.__csvExtra) ? sub.__csvExtra.map((x: any) => String(x)) : [];
+  return [...base, ...extra].join(",");
 }

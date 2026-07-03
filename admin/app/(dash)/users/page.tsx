@@ -14,13 +14,17 @@ export default function UsersPage() {
 
   const users = data?.users ?? [];
 
-  async function act(fn: () => Promise<any>) {
+  // Returns whether the action succeeded, so a create form only clears its inputs on
+  // success (not when the request failed and the user must retry).
+  async function act(fn: () => Promise<any>): Promise<boolean> {
     setActionError(null);
     try {
       await fn();
       await refresh();
+      return true;
     } catch (e: any) {
       setActionError(e.message || "Action failed");
+      return false;
     }
   }
 
@@ -73,9 +77,9 @@ function UserRow({
   onDelete,
 }: {
   user: User;
-  onToggle: () => Promise<void>;
-  onReset: (pw: string) => Promise<void>;
-  onDelete: () => Promise<void>;
+  onToggle: () => Promise<boolean>;
+  onReset: (pw: string) => Promise<boolean>;
+  onDelete: () => Promise<boolean>;
 }) {
   const [resetting, setResetting] = useState(false);
   const [pw, setPw] = useState("");
@@ -103,9 +107,11 @@ function UserRow({
               className="btn-primary"
               disabled={pw.length < 8}
               onClick={async () => {
-                await onReset(pw);
-                setPw("");
-                setResetting(false);
+                const ok = await onReset(pw);
+                if (ok) {
+                  setPw("");
+                  setResetting(false);
+                }
               }}
             >
               Save
@@ -144,7 +150,7 @@ function UserRow({
   );
 }
 
-function CreateUser({ onCreate }: { onCreate: (email: string, password: string) => Promise<void> }) {
+function CreateUser({ onCreate }: { onCreate: (email: string, password: string) => Promise<boolean> }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -170,10 +176,12 @@ function CreateUser({ onCreate }: { onCreate: (email: string, password: string) 
           disabled={!valid || busy}
           onClick={async () => {
             setBusy(true);
-            await onCreate(email.trim(), password);
+            const ok = await onCreate(email.trim(), password);
             setBusy(false);
-            setEmail("");
-            setPassword("");
+            if (ok) {
+              setEmail("");
+              setPassword("");
+            }
           }}
         >
           {busy ? "Creating…" : "Create user"}

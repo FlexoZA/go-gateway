@@ -13,6 +13,10 @@ type State = "idle" | "starting" | "live" | "error";
 export function LivePlayer({ serial, disabled = false }: { serial: string; disabled?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  // The camera/profile actually streaming right now (null when idle). The unmount
+  // cleanup and stop() use this rather than the live `camera`/`profile` state so we
+  // always stop the stream that was started, not whatever the selects last showed.
+  const activeRef = useRef<{ camera: number; profile: number } | null>(null);
   const [camera, setCamera] = useState(0);
   const [profile, setProfile] = useState(1); // default sub-stream (lower bandwidth/latency)
   const [state, setState] = useState<State>("idle");
@@ -91,6 +95,7 @@ export function LivePlayer({ serial, disabled = false }: { serial: string; disab
       if (res.ready === false) {
         setError("Device accepted the request but sent no video yet — check the camera/channel.");
       }
+      activeRef.current = { camera, profile }; // record what we actually started
       attach(`/api/gw/hls/${res.hls_path}`);
     } catch (e: any) {
       setError(e.message || "Failed to start stream");
@@ -99,26 +104,31 @@ export function LivePlayer({ serial, disabled = false }: { serial: string; disab
   }
 
   async function stop() {
+    const active = activeRef.current ?? { camera, profile };
+    activeRef.current = null;
     teardown();
     setState("idle");
     try {
       await api(`units/${encodeURIComponent(serial)}/stream/stop`, {
         method: "POST",
-        body: JSON.stringify({ camera, profile }),
+        body: JSON.stringify(active),
       });
     } catch {
       /* best-effort */
     }
   }
 
-  // Stop the stream when leaving the page.
+  // Stop the stream when leaving the page. Uses the ref (not the render-time
+  // camera/profile) so it stops whatever is actually streaming.
   useEffect(() => {
     return () => {
       teardown();
+      const active = activeRef.current;
+      if (!active) return; // nothing was streaming
       // fire-and-forget stop so we don't leave the device streaming
       api(`units/${encodeURIComponent(serial)}/stream/stop`, {
         method: "POST",
-        body: JSON.stringify({ camera, profile }),
+        body: JSON.stringify(active),
       }).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

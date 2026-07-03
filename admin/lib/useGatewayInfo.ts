@@ -49,11 +49,19 @@ function load(force = false): Promise<GatewayInfo> {
     cache = null;
     inflight = null;
   }
-  inflight ??= api<GatewayInfo>("gateway/info").then((d) => {
-    cache = d;
-    listeners.forEach((l) => l());
-    return d;
-  });
+  inflight ??= api<GatewayInfo>("gateway/info")
+    .then((d) => {
+      cache = d;
+      listeners.forEach((l) => l());
+      return d;
+    })
+    .catch((e) => {
+      // Don't cache a rejected promise: clear inflight so a transient failure at
+      // mount can be retried, instead of leaving capability-gated UI hidden until
+      // a full page reload.
+      inflight = null;
+      throw e;
+    });
   return inflight;
 }
 
