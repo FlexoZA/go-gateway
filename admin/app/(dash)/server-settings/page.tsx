@@ -57,6 +57,11 @@ export default function ServerSettingsPage() {
       <div className="mb-8 max-w-3xl space-y-4">
         <GatewayNameCard current={settingVal("gateway_name")} onSaved={settings.refresh} />
         <DeviceAuthCard current={settingVal("device_reject_unknown")} onSaved={settings.refresh} />
+        {/* Only shown on a gateway that stores clips/snapshots (the setting is
+            seeded only then). */}
+        {settings.data?.settings.some((s) => s.key === "media_retention_days") && (
+          <MediaRetentionCard current={settingVal("media_retention_days")} onSaved={settings.refresh} />
+        )}
       </div>
 
       <div className="max-w-3xl space-y-4">
@@ -204,6 +209,73 @@ function DeviceAuthCard({ current, onSaved }: { current: string; onSaved: () => 
           ? "On (default) — unknown serials are quarantined and rejected until you approve them on the Devices page."
           : "Off — unknown serials are auto-registered and admitted immediately."}
       </p>
+    </div>
+  );
+}
+
+function MediaRetentionCard({ current, onSaved }: { current: string; onSaved: () => void }) {
+  const [value, setValue] = useState(current);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setValue(current);
+  }, [current]);
+
+  const dirty = value.trim() !== current.trim();
+  const days = Number(value);
+  const valid = Number.isInteger(days) && days >= 0 && days <= 3650;
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await api("settings", { method: "PUT", body: JSON.stringify({ key: "media_retention_days", value: String(days) }) });
+      setSaved(true);
+      onSaved();
+    } catch (e: any) {
+      setError(e.message || "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-white">Clip &amp; snapshot retention</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          How long stored clips and snapshots are kept on the server before they’re automatically deleted. Set{" "}
+          <span className="font-mono text-slate-200">0</span> to keep them forever. Cleanup runs hourly.
+        </p>
+      </div>
+
+      {error && <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</div>}
+      {saved && !dirty && (
+        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">Saved.</div>
+      )}
+
+      <div className="flex items-end gap-3">
+        <div className="w-40">
+          <label className="text-xs text-slate-400">Retention (days)</label>
+          <input
+            className="input mt-1"
+            type="number"
+            min={0}
+            max={3650}
+            step={1}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+        </div>
+        <button className="btn-primary" onClick={save} disabled={!dirty || busy || !valid}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {!valid && <p className="text-xs text-rose-300">Enter a whole number of days between 0 and 3650.</p>}
+      {valid && days === 0 && <p className="text-xs text-amber-300">Keeping clips forever — watch disk usage.</p>}
     </div>
   );
 }

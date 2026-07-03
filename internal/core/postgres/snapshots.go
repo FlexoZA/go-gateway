@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -83,6 +84,32 @@ func (s *Store) DeleteSnapshot(ctx context.Context, id int64) (string, error) {
 		return "", fmt.Errorf("delete snapshot: %w", err)
 	}
 	return path, nil
+}
+
+// DeleteSnapshotsOlderThan deletes up to limit snapshot rows created before cutoff
+// and returns their storage paths so the caller can unlink the JPEG files.
+func (s *Store) DeleteSnapshotsOlderThan(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.pool.Query(ctx,
+		`DELETE FROM snapshots WHERE id IN (
+		    SELECT id FROM snapshots WHERE created_at < $1 ORDER BY id LIMIT $2
+		 ) RETURNING storage_path`,
+		cutoff, limit)
+	if err != nil {
+		return nil, fmt.Errorf("delete old snapshots: %w", err)
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
 }
 
 // scanSnapshot reads a snapshots row (column order must match the SELECTs above).

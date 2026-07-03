@@ -87,6 +87,12 @@ type Config struct {
 	// ClipsRoot is the directory (the "bucket") where recorded clip .mp4 files
 	// are stored on the server. Should be a persistent volume.
 	ClipsRoot string
+
+	// MediaRetentionDays SEEDS the media_retention_days server setting on first run:
+	// how many days stored clips and snapshots are kept before the retention reaper
+	// deletes them. 0 = keep forever. Thereafter it is edited live in the admin
+	// Server Settings; this env value only sets the initial default. Default 30.
+	MediaRetentionDays int
 }
 
 // VideoEnabled reports whether live media streaming is configured.
@@ -122,6 +128,7 @@ func Load() Config {
 		HLSRoot:                    getenv("HLS_ROOT", "/tmp/hls"),
 		FFmpegPath:                 getenv("FFMPEG_PATH", "ffmpeg"),
 		ClipsRoot:                  getenv("CLIPS_ROOT", "/var/lib/gateway/clips"),
+		MediaRetentionDays:         getenvInt("MEDIA_RETENTION_DAYS", 30),
 	}
 }
 

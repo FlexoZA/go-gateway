@@ -18,6 +18,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -481,6 +482,16 @@ func (a *App) startStoreBackedServices(ctx context.Context) {
 	}
 	applyLiveSettings()
 	go a.store.ListenForSettingsChanges(ctx, func(string) { applyLiveSettings() })
+
+	// Media retention: seed the days default on first run, then run a background
+	// reaper that deletes clips/snapshots older than the (live-editable) setting so
+	// the clip bucket can't grow without bound. Only meaningful with a media bucket.
+	if a.cfg.ClipsRoot != "" && a.anyMedia() != nil {
+		if err := a.store.SeedSettingDefault(ctx, postgres.SettingMediaRetentionDays, strconv.Itoa(a.cfg.MediaRetentionDays)); err != nil {
+			a.log.Error(map[string]any{"event": "media_retention_seed_failed", "error": err.Error()})
+		}
+		a.startMediaRetention(ctx)
+	}
 }
 
 // startHTTPAPI builds and runs the management/control HTTP API for every unit.
@@ -691,6 +702,94 @@ func (a *App) seedWebhooks(ctx context.Context) {
 	if seeded {
 		a.log.Info(map[string]any{"event": "webhook_seeded", "url": url})
 	}
+}
+
+// mediaRetentionInterval is how often the retention reaper sweeps. A live edit to
+// media_retention_days therefore takes effect on the next sweep (≤ this interval).
+const mediaRetentionInterval = 1 * time.Hour
+
+// startMediaRetention runs a background reaper that deletes clips and snapshots
+// older than the media_retention_days setting, bounding the clip bucket's growth.
+// It sweeps at startup and then every mediaRetentionInterval, reading the (live-
+// editable) retention setting each sweep.
+func (a *App) startMediaRetention(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(mediaRetentionInterval)
+		defer t.Stop()
+		a.reapMedia(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				a.reapMedia(ctx)
+			}
+		}
+	}()
+}
+
+// reapMedia deletes stored clips/snapshots older than the retention window. A
+// setting of 0 (or unset) disables reaping (keep forever).
+func (a *App) reapMedia(ctx context.Context) {
+	days := a.mediaRetentionDays(ctx)
+	if days <= 0 {
+		return
+	}
+	cutoff := time.Now().AddDate(0, 0, -days)
+	clips := a.reapExpired(ctx, cutoff, a.store.DeleteClipsOlderThan)
+	snaps := a.reapExpired(ctx, cutoff, a.store.DeleteSnapshotsOlderThan)
+	if clips+snaps > 0 {
+		a.log.Info(map[string]any{"event": "media_reaped", "clips": clips, "snapshots": snaps, "retention_days": days})
+	}
+}
+
+// reapExpired deletes rows via del in batches, unlinking each returned file path
+// (relative to CLIPS_ROOT), and returns how many were removed.
+func (a *App) reapExpired(ctx context.Context, cutoff time.Time, del func(context.Context, time.Time, int) ([]string, error)) int {
+	const batch = 500
+	total := 0
+	for ctx.Err() == nil {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		paths, err := del(cctx, cutoff, batch)
+		cancel()
+		if err != nil {
+			a.log.Error(map[string]any{"event": "media_reap_failed", "error": err.Error()})
+			return total
+		}
+		for _, p := range paths {
+			if p == "" {
+				continue
+			}
+			if err := os.Remove(filepath.Join(a.cfg.ClipsRoot, filepath.FromSlash(p))); err != nil && !os.IsNotExist(err) {
+				a.log.Debug(map[string]any{"event": "media_file_unlink_failed", "path": p, "error": err.Error()})
+			}
+		}
+		total += len(paths)
+		if len(paths) < batch {
+			break
+		}
+	}
+	return total
+}
+
+// mediaRetentionDays reads the current media_retention_days setting, falling back to
+// the env-seeded default if the row is missing or unparseable.
+func (a *App) mediaRetentionDays(ctx context.Context) int {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	v, ok, err := a.store.GetSetting(cctx, postgres.SettingMediaRetentionDays)
+	if err != nil {
+		a.log.Debug(map[string]any{"event": "media_retention_read_failed", "error": err.Error()})
+		return a.cfg.MediaRetentionDays
+	}
+	if !ok {
+		return a.cfg.MediaRetentionDays
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return a.cfg.MediaRetentionDays
+	}
+	return n
 }
 
 // applyWebhooks loads the enabled webhook URLs and installs them as the sink's

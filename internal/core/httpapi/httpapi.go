@@ -94,6 +94,7 @@ const (
 	settingDevicePort          = "device_port"
 	settingGatewayName         = "gateway_name"
 	settingDeviceRejectUnknown = "device_reject_unknown"
+	settingMediaRetentionDays  = "media_retention_days"
 )
 
 // errNotFound mirrors postgres.ErrNotFound without importing it (the store
@@ -1883,6 +1884,12 @@ func (s *Server) handleSetSetting(w http.ResponseWriter, r *http.Request) {
 	if key == settingDeviceRejectUnknown && !validBool(body.Value) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "device_reject_unknown must be true or false"})
 		return
+	}
+	if key == settingMediaRetentionDays {
+		if n, err := strconv.Atoi(strings.TrimSpace(body.Value)); err != nil || n < 0 || n > 3650 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "media_retention_days must be a whole number of days between 0 (keep forever) and 3650"})
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
