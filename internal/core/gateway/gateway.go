@@ -14,6 +14,7 @@ import (
 	"net"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dfm/device-gateway/internal/core/config"
@@ -442,11 +443,20 @@ type Server struct {
 	proto       Protocol
 	deps        Deps
 	idleTimeout time.Duration
+	limiter     *connLimiter
+
+	rejected      atomic.Int64 // connections refused by the cap (cumulative)
+	lastRejectLog atomic.Int64 // unix seconds of the last throttled reject log
 }
 
 // New constructs a Server for the given protocol and dependencies.
 func New(proto Protocol, deps Deps) *Server {
-	return &Server{proto: proto, deps: deps, idleTimeout: 3 * time.Minute}
+	return &Server{
+		proto:       proto,
+		deps:        deps,
+		idleTimeout: 3 * time.Minute,
+		limiter:     newConnLimiter(deps.Config.MaxConnections, deps.Config.MaxConnectionsPerIP),
+	}
 }
 
 // SetIdleTimeout overrides the per-connection idle timeout.
@@ -476,6 +486,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	}()
 
 	var wg sync.WaitGroup
+	var acceptDelay time.Duration // backoff after a temporary Accept error
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -483,15 +494,61 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 				wg.Wait()
 				return nil
 			}
-			s.deps.Log.Error(map[string]any{"event": "accept_error", "error": err.Error()})
+			// A transient Accept error is usually fd exhaustion (EMFILE/ENFILE) or a
+			// per-connection RST. Backing off avoids a hot loop that pins a CPU and
+			// floods the error log (and gateway_errors) thousands of times a second.
+			if acceptDelay == 0 {
+				acceptDelay = 5 * time.Millisecond
+			} else {
+				acceptDelay *= 2
+			}
+			if acceptDelay > time.Second {
+				acceptDelay = time.Second
+			}
+			s.deps.Log.Error(map[string]any{"event": "accept_error", "error": err.Error(), "backoff_ms": acceptDelay.Milliseconds()})
+			select {
+			case <-time.After(acceptDelay):
+			case <-ctx.Done():
+				wg.Wait()
+				return nil
+			}
+			continue
+		}
+		acceptDelay = 0
+
+		// Cap concurrent connections so a flood of sockets can't exhaust memory/fds
+		// and take down every co-hosted unit. Over the cap, drop the new connection.
+		ip := remoteHost(conn)
+		if !s.limiter.acquire(ip) {
+			s.rejected.Add(1)
+			s.logRejected(ip)
+			conn.Close()
 			continue
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer s.limiter.release(ip)
 			s.handle(ctx, conn)
 		}()
 	}
+}
+
+// logRejected reports a capped connection at most once per second so an ongoing
+// flood produces a heartbeat, not a log storm.
+func (s *Server) logRejected(ip string) {
+	now := time.Now().Unix()
+	last := s.lastRejectLog.Load()
+	if now-last < 1 {
+		return
+	}
+	if !s.lastRejectLog.CompareAndSwap(last, now) {
+		return
+	}
+	s.deps.Log.Error(map[string]any{
+		"event": "connection_rejected", "unit": s.proto.Name(),
+		"remote": ip, "live": s.limiter.count(), "rejected_total": s.rejected.Load(),
+	})
 }
 
 func (s *Server) handle(ctx context.Context, raw net.Conn) {
