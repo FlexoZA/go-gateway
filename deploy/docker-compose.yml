@@ -2,6 +2,16 @@
 # type (see cmd/gateway — howen + fleetiger + cathexis + navtelecom), each on its own port,
 # behind one Postgres registry, telemetry webhook, HTTP API, and admin panel.
 # Adding a unit is a one-line change in cmd/gateway plus its port mapping below.
+
+# Bound container log files so a chatty device fleet (or DEBUG=1 per-frame logging)
+# can't fill the disk and take down Postgres/clip writes. 50 MB × 5 files per
+# container. Referenced by every service via `logging: *default-logging`.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -18,6 +28,7 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    logging: *default-logging
 
   gateway:
     build:
@@ -79,6 +90,7 @@ services:
       - "${STREAM_LISTEN_PORT:-32326}:${STREAM_LISTEN_PORT:-32326}"  # cathexis media (live stream)
       - "8080:8080"    # HTTP API
     restart: unless-stopped
+    logging: *default-logging
 
   # Admin panel (Next.js). Talks to the gateway ONLY over its HTTP API, using a
   # server-held API key — it has no database access of its own.
@@ -100,6 +112,7 @@ services:
     ports:
       - "3000:3000"
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   pgdata:
