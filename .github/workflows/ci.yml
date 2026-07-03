@@ -86,3 +86,20 @@ jobs:
 
       - name: build
         run: npm run build
+
+  docker:
+    name: Docker images (build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build the images CI ships so a Dockerfile break (bad COPY, stale go.sum,
+      # missing build stage, a new volume dir) fails here instead of at deploy time.
+      - name: Gateway image — multi-unit
+        run: docker build -f deploy/Dockerfile --build-arg UNIT=gateway -t device-gateway:ci .
+
+      - name: Gateway image — lean single-unit (howen)
+        run: docker build -f deploy/Dockerfile --build-arg UNIT=howen -t device-gateway-howen:ci .
+
+      - name: Admin image
+        run: docker build -f admin/Dockerfile -t device-gateway-admin:ci admin
