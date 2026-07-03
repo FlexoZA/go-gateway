@@ -74,6 +74,17 @@ type Config struct {
 	// still loaded once at startup). Default 60.
 	MappingRefreshSeconds int
 
+	// MaxConnections caps concurrent device connections PER LISTENER (unit type), so
+	// a flood of sockets can't exhaust memory/file descriptors and take down every
+	// co-hosted unit. Over the cap, new connections are dropped. 0 = unlimited.
+	// Default 20000. Ensure the process file-descriptor limit (ulimit -n) exceeds it.
+	MaxConnections int
+
+	// MaxConnectionsPerIP caps concurrent connections from a single source IP.
+	// Default 0 (disabled) because IoT/GPS fleets often share a carrier-NAT IP;
+	// enable it only when devices have distinct addresses.
+	MaxConnectionsPerIP int
+
 	// --- Video / live media (HLS) ---
 
 	// MediaPort is the TCP port devices connect to for media (video) frames,
@@ -142,6 +153,8 @@ func Load() Config {
 		DeviceAuthMode:             authMode,
 		DeviceRejectUnknown:        getenvBool("DEVICE_REJECT_UNKNOWN", true),
 		MappingRefreshSeconds:      getenvInt("MAPPING_REFRESH_SECONDS", 60),
+		MaxConnections:             getenvInt("MAX_CONNECTIONS", 20000),
+		MaxConnectionsPerIP:        getenvInt("MAX_CONNECTIONS_PER_IP", 0),
 		MediaPort:                  getenvInt("MEDIA_PORT", 33001),
 		MediaAdvertiseHost:         os.Getenv("MEDIA_ADVERTISE_HOST"),
 		HLSRoot:                    getenv("HLS_ROOT", "/tmp/hls"),

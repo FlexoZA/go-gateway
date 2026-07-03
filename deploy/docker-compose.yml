@@ -55,6 +55,10 @@ services:
       - DEVICE_AUTH_MODE=${DEVICE_AUTH_MODE:-postgres}
       - DEVICE_REJECT_UNKNOWN=${DEVICE_REJECT_UNKNOWN:-true}
       - MAPPING_REFRESH_SECONDS=${MAPPING_REFRESH_SECONDS:-60}
+      # DoS guard: cap concurrent device connections per listener (0 = unlimited).
+      # The nofile ulimit below is raised to stay above this.
+      - MAX_CONNECTIONS=${MAX_CONNECTIONS:-20000}
+      - MAX_CONNECTIONS_PER_IP=${MAX_CONNECTIONS_PER_IP:-0}
       # Live video (HLS) for video-capable units (howen). MEDIA_ADVERTISE_HOST is
       # the host devices dial back for media frames (no port); empty DISABLES video.
       - MEDIA_ADVERTISE_HOST=${MEDIA_ADVERTISE_HOST:-}
@@ -85,6 +89,12 @@ services:
       - "${VIDEO_LISTEN_PORT:-32325}:${VIDEO_LISTEN_PORT:-32325}"    # cathexis media (clips)
       - "${STREAM_LISTEN_PORT:-32326}:${STREAM_LISTEN_PORT:-32326}"  # cathexis media (live stream)
       - "8080:8080"    # HTTP API
+    # Raise the file-descriptor limit above MAX_CONNECTIONS (each device connection,
+    # plus ffmpeg pipes and webhook sockets, consumes fds).
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     restart: unless-stopped
 
   # Admin panel (Next.js). Talks to the gateway ONLY over its HTTP API, using a

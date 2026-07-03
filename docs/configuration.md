@@ -23,6 +23,8 @@ applied in `internal/core/config`.
 | `DEVICE_AUTH_MODE` | `postgres` if `DATABASE_URL` set, else `allow_all` | `allow_all` or `postgres` |
 | `DEVICE_REJECT_UNKNOWN` | `true` | In `postgres` mode, reject serials not already in `devices` until approved (secure by default; set `false` to auto-provision + admit). **Seeds the `device_reject_unknown` setting on first run**; toggle it live in the panel (Server Settings → Device authorization) |
 | `MAPPING_REFRESH_SECONDS` | `60` | Safety-net reload interval for event mappings (edits already apply instantly via `NOTIFY`; `0` disables the net) |
+| `MAX_CONNECTIONS` | `20000` | Cap on concurrent device connections **per listener** (unit type); over it, new connections are dropped so a socket flood can't exhaust memory/fds and take down co-hosted units. `0` = unlimited. Keep the process file-descriptor limit (`ulimit -n`) above this. |
+| `MAX_CONNECTIONS_PER_IP` | `0` (off) | Cap on concurrent connections from a single source IP. Off by default because IoT/GPS fleets often share a carrier-NAT IP; enable only when devices have distinct addresses. |
 | `MEDIA_PORT` | `33001` | Device **media** TCP port (video frames), separate from the `LISTEN_PORT` control channel |
 | `MEDIA_ADVERTISE_HOST` | _(empty)_ | Host (no port) the device dials back for media, embedded in the live-preview command. **Empty disables video** — live streaming, recordings query, and clips all return `503`/`404` until set |
 | `HLS_ROOT` | `/tmp/hls` | Directory where ffmpeg writes HLS playlists/segments for live streams |
