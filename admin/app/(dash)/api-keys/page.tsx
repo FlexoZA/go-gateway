@@ -24,15 +24,17 @@ export default function APIKeysPage() {
 
   const keys = data?.api_keys ?? [];
 
-  async function create(name: string) {
+  async function create(name: string): Promise<boolean> {
     setActionError(null);
     setNewKey(null);
     try {
       const res = await api<{ key: string }>("api-keys", { method: "POST", body: JSON.stringify({ name }) });
       setNewKey(res.key);
       await refresh();
+      return true;
     } catch (e: any) {
       setActionError(e.message || "Create failed");
+      return false;
     }
   }
 
@@ -179,7 +181,7 @@ function NewKeyBanner({ value, onDismiss }: { value: string; onDismiss: () => vo
   );
 }
 
-function CreateKey({ onCreate }: { onCreate: (name: string) => Promise<void> }) {
+function CreateKey({ onCreate }: { onCreate: (name: string) => Promise<boolean> }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -202,9 +204,9 @@ function CreateKey({ onCreate }: { onCreate: (name: string) => Promise<void> }) 
           disabled={busy || !name.trim()}
           onClick={async () => {
             setBusy(true);
-            await onCreate(name.trim());
+            const ok = await onCreate(name.trim());
             setBusy(false);
-            setName("");
+            if (ok) setName("");
           }}
         >
           {busy ? "Generating…" : "Generate key"}

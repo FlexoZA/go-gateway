@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useConfirm } from "@/components/confirm";
 import { api } from "@/lib/api";
 import { Spinner } from "@/components/ui";
@@ -51,23 +51,29 @@ export function DeviceConfig({ serial, unit }: { serial: string; unit: string })
 
   const category = CATEGORIES.find((c) => c.key === cat)!;
 
+  // Sequence guard: switching category mid-read must not let a slow earlier response
+  // land last and show the wrong category's segments.
+  const reqSeq = useRef(0);
   const load = useCallback(async (catKey: string) => {
     const c = CATEGORIES.find((x) => x.key === catKey)!;
+    const myReq = ++reqSeq.current;
     setLoading(true);
     setError(null);
     setNotice(null);
     setDirty({});
     try {
       const res = await api<{ sc: Sc }>(`units/${encodeURIComponent(serial)}/config?modules=${c.segments.join(",")}`);
+      if (myReq !== reqSeq.current) return; // superseded by a newer category switch
       setSc(res.sc || {});
       setSleeping(false);
     } catch (e: any) {
+      if (myReq !== reqSeq.current) return;
       const msg = e.message || "Failed to read config";
       setSleeping(/standby/i.test(msg));
       setError(msg);
       setSc({});
     } finally {
-      setLoading(false);
+      if (myReq === reqSeq.current) setLoading(false);
     }
   }, [serial]);
 

@@ -31,16 +31,18 @@ async function handle(req: NextRequest, ctx: { params: { path?: string[] } }) {
     return NextResponse.json({ error: "gateway unreachable" }, { status: 502 });
   }
 
-  // Pass the body through as bytes — JSON *and* binary (HLS .ts video segments,
-  // which res.text() would corrupt). Forward the content-type and cache headers.
+  // Forward the response as-is: JSON *and* binary (HLS .ts segments, clip/backup
+  // downloads). Stream the body through rather than buffering it in Node memory, and
+  // forward the headers a download needs — notably Content-Disposition, without which
+  // a clip/backup opens inline instead of downloading with its filename.
   const headers = new Headers();
   const ct = res.headers.get("Content-Type");
   headers.set("Content-Type", ct || "application/json");
-  const cc = res.headers.get("Cache-Control");
-  if (cc) headers.set("Cache-Control", cc);
-
-  const body = await res.arrayBuffer();
-  return new NextResponse(body, { status: res.status, headers });
+  for (const h of ["Cache-Control", "Content-Disposition", "Content-Length"]) {
+    const v = res.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+  return new NextResponse(res.body, { status: res.status, headers });
 }
 
 export const GET = handle;

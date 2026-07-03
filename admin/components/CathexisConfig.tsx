@@ -297,7 +297,10 @@ function Field({
     <Row label={label}>
       <input
         className="input w-44 font-mono"
-        inputMode={numeric ? "numeric" : undefined}
+        // Numeric fields use a number input so the browser returns "" (never free
+        // text) for invalid entries — otherwise Number(raw)=NaN serialized to JSON
+        // null and reached the device.
+        type={numeric && !stringMode ? "number" : "text"}
         value={value == null ? "" : String(value)}
         onChange={(e) => {
           const raw = e.target.value;

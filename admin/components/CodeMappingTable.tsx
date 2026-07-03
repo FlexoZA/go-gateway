@@ -58,7 +58,7 @@ export function CodeMappingTable({ unit, model = "" }: { unit: string; model?: s
     return g;
   }, [data]);
 
-  async function save(map_type: string, code: number, event_code: string, description: string) {
+  async function save(map_type: string, code: number, event_code: string, description: string): Promise<boolean> {
     setActionError(null);
     try {
       await api("mappings", {
@@ -66,8 +66,10 @@ export function CodeMappingTable({ unit, model = "" }: { unit: string; model?: s
         body: JSON.stringify({ unit, model, map_type, code, event_code, description }),
       });
       await refresh();
+      return true;
     } catch (e: any) {
       setActionError(e.message || "Save failed");
+      return false;
     }
   }
 
@@ -142,7 +144,7 @@ function MappingRow({
   onDelete,
 }: {
   m: Mapping;
-  onSave: (mapType: string, code: number, eventCode: string, description: string) => Promise<void>;
+  onSave: (mapType: string, code: number, eventCode: string, description: string) => Promise<boolean>;
   onDelete: (mapType: string, code: number) => Promise<void>;
 }) {
   const [eventCode, setEventCode] = useState(m.event_code);
@@ -214,7 +216,7 @@ function AddMapping({
 }: {
   unit: string;
   mapTypes: string[];
-  onAdd: (mapType: string, code: number, eventCode: string, description: string) => Promise<void>;
+  onAdd: (mapType: string, code: number, eventCode: string, description: string) => Promise<boolean>;
 }) {
   const [mapType, setMapType] = useState("");
   const [code, setCode] = useState("");
@@ -262,11 +264,13 @@ function AddMapping({
           disabled={!valid || busy}
           onClick={async () => {
             setBusy(true);
-            await onAdd(mapType.trim(), Number(code), eventCode.trim(), description.trim());
+            const ok = await onAdd(mapType.trim(), Number(code), eventCode.trim(), description.trim());
             setBusy(false);
-            setCode("");
-            setEventCode("");
-            setDescription("");
+            if (ok) {
+              setCode("");
+              setEventCode("");
+              setDescription("");
+            }
           }}
         >
           {busy ? "Saving…" : "Save mapping"}
