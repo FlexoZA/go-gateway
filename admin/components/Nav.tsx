@@ -4,9 +4,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { logout } from "@/lib/api";
 import { useAggregateCaps } from "@/lib/useGatewayInfo";
+import { useFetch } from "@/lib/useFetch";
+
+type Setting = { key: string; value: string };
 
 export function Nav() {
   const pathname = usePathname();
+  // Brand shows the configured gateway identity (server settings → "gateway_name"),
+  // falling back to the product name until it loads or when it's unset.
+  const settings = useFetch<{ settings: Setting[] }>("settings");
+  const gatewayName =
+    settings.data?.settings.find((s) => s.key === "gateway_name")?.value?.trim() || "Device Gateway";
   // Union of capabilities across every hosted unit type: a link shows if ANY unit
   // supports the feature (a GPS-only unit has no Clips; a unit without editable
   // mappings has no Device Mapping). Shown until we positively know it's absent.
@@ -29,7 +37,7 @@ export function Nav() {
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-edge bg-panel">
       <div className="border-b border-edge px-5 py-4">
-        <div className="text-sm font-semibold text-white">Device Gateway</div>
+        <div className="text-sm font-semibold text-white">{gatewayName}</div>
         <div className="text-xs text-slate-400">Admin</div>
       </div>
       <nav className="flex-1 space-y-1 p-3">
