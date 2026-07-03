@@ -453,6 +453,12 @@ func New(host string, port int, units []UnitInfo, verifier KeyVerifier, data Dat
 		Addr:              s.addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		// Bound slow-body and idle keep-alive clients so they can't pin handler
+		// goroutines. WriteTimeout is intentionally left unset: this server streams
+		// HLS segments and large clip/backup downloads that a deadline would truncate
+		// on a slow link.
+		ReadTimeout: 60 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 	return s
 }
@@ -475,8 +481,23 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "unit": s.defaultUnit})
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	body := map[string]any{"status": "ok", "unit": s.defaultUnit}
+	// When a database is wired, a healthy gateway must be able to reach it —
+	// otherwise device auth and every data endpoint fail. Report 503 so an
+	// orchestrator/healthcheck sees the process as unhealthy, not merely up.
+	if hc, ok := s.data.(interface{ Ping(context.Context) error }); ok {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := hc.Ping(ctx); err != nil {
+			body["status"] = "degraded"
+			body["database"] = "unreachable"
+			writeJSON(w, http.StatusServiceUnavailable, body)
+			return
+		}
+		body["database"] = "ok"
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) handlePing(w http.ResponseWriter, _ *http.Request) {

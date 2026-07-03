@@ -697,6 +697,36 @@ Add a custom event code to the picklist. `code` is required.
 { "ok": true, "code": "AI:CUSTOM" }
 ```
 
+## Server / operations
+
+### `GET /api/metrics`
+Host CPU/memory + this process's runtime stats for the dashboard, plus (when wired)
+webhook telemetry-delivery stats and connected-device counts. Fields that can't be
+read on the host platform are omitted.
+```json
+// 200
+{
+  "num_cpu": 8, "goroutines": 214, "heap_alloc_mb": 24.1,
+  "cpu_percent": 3.4, "mem_percent": 41.2, "uptime_seconds": 91234,
+  "devices_connected": 12, "devices_online": 11,
+  "telemetry": { "durable": true, "backlog": 0, "enqueued": 5321, "delivered": 5321, "failed": 0, "dropped": 0, "targets": 1 }
+}
+```
+
+### `GET /api/ports`
+The device-facing TCP ports the gateway is configured to listen on (per unit's
+control/media port), each with a self-check of whether it is currently accepting.
+
+### `GET /api/streams` · `POST /api/streams/stop-all`
+List the active live video streams across all video units; stop-all tears them down.
+
+### Database backups
+Available when a database and `BACKUPS_ROOT` are configured (else `503`).
+- `GET /api/backups` — list archives, newest first (`{name, size, created_at}`).
+- `POST /api/backups` — run a backup now; returns the new archive's info.
+- `GET /api/backups/{name}/download` — download the `.tar.gz`.
+- `DELETE /api/backups/{name}` — delete an archive.
+
 ## Howen command catalog
 
 `type` is one of the following. Destructive commands (marked ⚠) require

@@ -10,6 +10,10 @@ import (
 	"sync/atomic"
 )
 
+// Emit pure JSON: clear the stdlib logger's default date/time prefix so each line
+// is a single valid JSON object (the container runtime timestamps the line itself).
+func init() { log.SetFlags(0) }
+
 // ErrorSink receives the fields of every Error-level line, in addition to
 // stdout. It lets the gateway persist its own errors (e.g. to Postgres) without
 // the logging package importing the storage layer. It is invoked synchronously
