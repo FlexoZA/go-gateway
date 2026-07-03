@@ -236,17 +236,29 @@ func (m *Manager) StartReaper(ctx context.Context) {
 
 // reapIdle stops every live stream idle for longer than idle as of now.
 func (m *Manager) reapIdle(now time.Time, idle time.Duration) {
-	var dead []string
+	// Snapshot the live streams under m.mu, then evaluate idleFor (which takes each
+	// stream's own s.mu) without holding m.mu — a stream whose s.mu is briefly held
+	// by an in-flight write must never stall registry-wide operations.
+	type entry struct {
+		id string
+		s  *Stream
+	}
+	var live []entry
 	m.mu.Lock()
 	for id, s := range m.streams {
 		if s.outFile != "" {
 			continue // a clip — finalized by the clip pipeline, not reaped here
 		}
-		if s.idleFor(now) > idle {
-			dead = append(dead, id)
-		}
+		live = append(live, entry{id, s})
 	}
 	m.mu.Unlock()
+
+	var dead []string
+	for _, e := range live {
+		if e.s.idleFor(now) > idle {
+			dead = append(dead, e.id)
+		}
+	}
 	for _, id := range dead {
 		m.log.Info(map[string]any{"event": "stream_reaped", "id": id, "reason": "idle"})
 		m.Stop(id)
@@ -283,15 +295,21 @@ func (s *Stream) idleFor(now time.Time) time.Duration {
 func (m *Manager) TouchPlaylistPath(relPath string) {
 	dir := filepath.Dir(filepath.Join(m.hlsRoot, relPath))
 	now := time.Now()
+	// Dir/outFile are immutable after construction, so match under m.mu but touch
+	// the found stream's s.mu outside m.mu (never hold both at once).
+	var found *Stream
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for _, s := range m.streams {
 		if s.outFile == "" && s.Dir == dir {
-			s.mu.Lock()
-			s.lastAccess = now
-			s.mu.Unlock()
-			return
+			found = s
+			break
 		}
+	}
+	m.mu.Unlock()
+	if found != nil {
+		found.mu.Lock()
+		found.lastAccess = now
+		found.mu.Unlock()
 	}
 }
 
@@ -323,13 +341,19 @@ type LiveStream struct {
 // ActiveStreams returns the currently-registered LIVE streams (clips excluded).
 func (m *Manager) ActiveStreams() []LiveStream {
 	now := time.Now()
+	// Snapshot live-stream pointers under m.mu, then read each under its own s.mu
+	// outside m.mu, so an in-flight write holding one stream's s.mu can't stall this.
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := []LiveStream{}
+	live := make([]*Stream, 0, len(m.streams))
 	for _, s := range m.streams {
 		if s.outFile != "" {
 			continue // a clip, not a live stream
 		}
+		live = append(live, s)
+	}
+	m.mu.Unlock()
+	out := []LiveStream{}
+	for _, s := range live {
 		s.mu.Lock()
 		out = append(out, LiveStream{
 			ID: s.ID, Serial: s.Serial, Camera: s.Camera, Profile: s.Profile,
@@ -358,6 +382,14 @@ func (m *Manager) StopAllLive() int {
 	return len(ids)
 }
 
+// stdinWriteTimeout bounds a single write to ffmpeg's stdin. The write holds s.mu,
+// and the stdin pipe has a ~64 KiB kernel buffer: if ffmpeg stops draining it (a
+// wedged process, or a full/hung HLS_ROOT disk) an unbounded write would hold s.mu
+// forever, which in turn wedges the reaper (it needs s.mu to reap the stream) and
+// every other stream op that needs m.mu. Bounding the write makes it fail instead,
+// so the caller drops the media connection and the reaper can tear the stream down.
+const stdinWriteTimeout = 10 * time.Second
+
 func (s *Stream) write(m *Manager, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -371,6 +403,11 @@ func (s *Stream) write(m *Manager, data []byte) error {
 		s.running = true
 	}
 	s.lastWrite = time.Now()
+	// os.Pipe's write end (what StdinPipe returns on Linux) is pollable, so a
+	// deadline turns an otherwise-unbounded blocking write into a timeout error.
+	if dw, ok := s.stdin.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		_ = dw.SetWriteDeadline(time.Now().Add(stdinWriteTimeout))
+	}
 	n, err := s.stdin.Write(data)
 	s.bytes += int64(n)
 	return err
