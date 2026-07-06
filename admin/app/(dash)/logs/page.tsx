@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { useFetch } from "@/lib/useFetch";
-import { Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
+import { usePagination } from "@/lib/usePagination";
+import { copyText } from "@/lib/clipboard";
+import { Empty, ErrorBanner, PageHeader, Pagination, Spinner } from "@/components/ui";
 
 type GatewayError = {
   id: number;
@@ -54,6 +56,7 @@ export default function LogsPage() {
 function GatewayLogs() {
   const { data, error, loading } = useFetch<{ logs: GatewayError[] }>("logs?limit=200", 10000);
   const logs = data?.logs ?? [];
+  const pg = usePagination(logs);
   return (
     <>
       <ErrorBanner message={error} />
@@ -62,31 +65,46 @@ function GatewayLogs() {
       ) : logs.length === 0 ? (
         <Empty>No gateway errors recorded.</Empty>
       ) : (
-        <div className="card overflow-x-auto p-0">
-          <table className="min-w-full divide-y divide-edge">
-            <thead>
-              <tr>
-                <th className="th">Time</th>
-                <th className="th">Event</th>
-                <th className="th">Namespace</th>
-                <th className="th">Details</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-edge">
-              {logs.map((l) => (
-                <tr key={l.id}>
-                  <td className="td whitespace-nowrap text-slate-400">{fmt(l.created_at)}</td>
-                  <td className="td font-mono text-rose-300">{l.event || "—"}</td>
-                  <td className="td text-slate-400">{l.namespace || "—"}</td>
-                  <td className="td">
-                    <div>{l.message || messageFrom(l.fields)}</div>
-                    {l.fields && <Fields fields={l.fields} />}
-                  </td>
+        <>
+          <div className="card overflow-x-auto p-0">
+            <table className="min-w-full divide-y divide-edge">
+              <thead>
+                <tr>
+                  <th className="th">Time</th>
+                  <th className="th">Event</th>
+                  <th className="th">Namespace</th>
+                  <th className="th">Details</th>
+                  <th className="th text-right">Copy</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-edge">
+                {pg.pageItems.map((l) => (
+                  <tr key={l.id}>
+                    <td className="td whitespace-nowrap text-slate-400">{fmt(l.created_at)}</td>
+                    <td className="td font-mono text-rose-300">{l.event || "—"}</td>
+                    <td className="td text-slate-400">{l.namespace || "—"}</td>
+                    <td className="td">
+                      <div>{l.message || messageFrom(l.fields)}</div>
+                      {l.fields && <Fields fields={l.fields} />}
+                    </td>
+                    <td className="td text-right">
+                      <CopyErrorButton error={l} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination
+            page={pg.page}
+            pageCount={pg.pageCount}
+            total={pg.total}
+            start={pg.start}
+            count={pg.pageItems.length}
+            onPage={pg.setPage}
+            noun="errors"
+          />
+        </>
       )}
     </>
   );
@@ -95,6 +113,7 @@ function GatewayLogs() {
 function DeviceLogs() {
   const { data, error, loading } = useFetch<{ errors: DeviceError[] }>("device-errors?limit=200", 10000);
   const errs = data?.errors ?? [];
+  const pg = usePagination(errs);
   return (
     <>
       <ErrorBanner message={error} />
@@ -103,32 +122,60 @@ function DeviceLogs() {
       ) : errs.length === 0 ? (
         <Empty>No device-reported errors.</Empty>
       ) : (
-        <div className="card overflow-x-auto p-0">
-          <table className="min-w-full divide-y divide-edge">
-            <thead>
-              <tr>
-                <th className="th">Time</th>
-                <th className="th">Serial</th>
-                <th className="th">Category</th>
-                <th className="th">Message</th>
-                <th className="th">Remote</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-edge">
-              {errs.map((e) => (
-                <tr key={e.id}>
-                  <td className="td whitespace-nowrap text-slate-400">{fmt(e.created_at)}</td>
-                  <td className="td font-mono">{e.serial}</td>
-                  <td className="td text-amber-300">{e.error_category || "—"}</td>
-                  <td className="td">{e.error_message}</td>
-                  <td className="td font-mono text-slate-400">{e.remote_address || "—"}</td>
+        <>
+          <div className="card overflow-x-auto p-0">
+            <table className="min-w-full divide-y divide-edge">
+              <thead>
+                <tr>
+                  <th className="th">Time</th>
+                  <th className="th">Serial</th>
+                  <th className="th">Category</th>
+                  <th className="th">Message</th>
+                  <th className="th">Remote</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-edge">
+                {pg.pageItems.map((e) => (
+                  <tr key={e.id}>
+                    <td className="td whitespace-nowrap text-slate-400">{fmt(e.created_at)}</td>
+                    <td className="td font-mono">{e.serial}</td>
+                    <td className="td text-amber-300">{e.error_category || "—"}</td>
+                    <td className="td">{e.error_message}</td>
+                    <td className="td font-mono text-slate-400">{e.remote_address || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination
+            page={pg.page}
+            pageCount={pg.pageCount}
+            total={pg.total}
+            start={pg.start}
+            count={pg.pageItems.length}
+            onPage={pg.setPage}
+            noun="errors"
+          />
+        </>
       )}
     </>
+  );
+}
+
+// CopyErrorButton copies a gateway error as pretty-printed JSON (all fields,
+// including the nested `fields` payload) — ready to paste into a ticket or
+// search. Uses copyText so it works on the plain-HTTP staging box too.
+function CopyErrorButton({ error }: { error: GatewayError }) {
+  const [state, setState] = useState<"idle" | "ok" | "fail">("idle");
+  async function onCopy() {
+    const ok = await copyText(JSON.stringify(error, null, 2));
+    setState(ok ? "ok" : "fail");
+    setTimeout(() => setState("idle"), 1500);
+  }
+  return (
+    <button className="btn-ghost whitespace-nowrap" onClick={onCopy} title="Copy this error as JSON">
+      {state === "ok" ? "Copied ✓" : state === "fail" ? "Failed" : "Copy"}
+    </button>
   );
 }
 
