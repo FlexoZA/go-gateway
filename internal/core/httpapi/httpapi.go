@@ -866,12 +866,26 @@ func (s *Server) handleQueryRecordings(w http.ResponseWriter, r *http.Request) {
 	if start <= 0 {
 		start = end - 24*60*60
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	// kind filters the list by whether the device tagged each file with an alarm:
+	// "alarm" = event/locked recordings only, "normal" = plain continuous only,
+	// "all" (default) = both.
+	kind := q.Get("kind")
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	recs, err := vc.QueryRecordings(ctx, camera, profile, start, end)
 	if err != nil {
 		s.writeStreamError(w, err)
 		return
+	}
+	if kind == "alarm" || kind == "normal" {
+		want := kind == "alarm"
+		filtered := make([]gateway.Recording, 0, len(recs))
+		for _, rec := range recs {
+			if rec.Alarm == want {
+				filtered = append(filtered, rec)
+			}
+		}
+		recs = filtered
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"recordings": recs, "count": len(recs)})
 }

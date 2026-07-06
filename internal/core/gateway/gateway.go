@@ -60,6 +60,12 @@ type Recording struct {
 	Size        int64  `json:"size"`
 	DeviceStart string `json:"device_start"`
 	DeviceEnd   string `json:"device_end"`
+	// Alarm is true when the device tagged this file with one or more alarm
+	// conditions (an event/locked recording) rather than a plain continuous
+	// recording. AlarmFlags is the raw 8-byte alarm bitfield as hex, present
+	// only when nonzero.
+	Alarm      bool   `json:"alarm"`
+	AlarmFlags string `json:"alarm_flags,omitempty"`
 }
 
 // VideoController is implemented by a protocol session that can start/stop a live
