@@ -101,7 +101,7 @@ export default function DevicesPage() {
         </div>
       )}
 
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-3 mt-8 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-semibold text-slate-300">Approved devices</h2>
         {approvedList.length > 0 && (
           <SearchInput
