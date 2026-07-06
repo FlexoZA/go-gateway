@@ -162,18 +162,32 @@ function TraceLine({ t }: { t: TraceEntry }) {
   const unmapped = t.source === "fallback";
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
+      {/* Section chip — the editable mapping section this code lives in (matches
+          the Device Mapping page headings), so you know exactly where to edit it.
+          Built-in resolutions aren't table-driven, so there's no section. */}
+      {t.map_type ? (
+        <span
+          className="rounded border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 font-mono text-xs text-indigo-300"
+          title="Editable mapping section (Device Mapping)"
+        >
+          {t.map_type}
+        </span>
+      ) : t.source === "builtin" ? (
+        <span
+          className="rounded border border-slate-500/30 bg-slate-500/10 px-1.5 py-0.5 font-mono text-xs text-slate-400"
+          title="Hardcoded resolution — no editable mapping section"
+        >
+          built-in
+        </span>
+      ) : null}
       {t.name ? (
         // Cathexis: the device's own event name is the natural identity.
         <span className="font-mono text-slate-400">
-          <span className="text-indigo-300">{t.name}</span> <span className="text-slate-500">(code {t.code})</span>
-        </span>
-      ) : t.map_type ? (
-        <span className="font-mono text-slate-400">
-          <span className="text-indigo-300">{t.map_type}</span> code <span className="text-slate-100">{t.code}</span>
+          <span className="text-slate-300">{t.name}</span> <span className="text-slate-500">(code {t.code})</span>
         </span>
       ) : (
         <span className="font-mono text-slate-400">
-          EC <span className="text-slate-100">{t.code}</span>
+          code <span className="text-slate-100">{t.code}</span>
         </span>
       )}
       <span className="text-slate-500">→</span>
@@ -183,7 +197,6 @@ function TraceLine({ t }: { t: TraceEntry }) {
         <span className="font-semibold text-emerald-300">{t.event_code}</span>
       )}
       {t.source === "table" && <Badge tone="green">mapped</Badge>}
-      {t.source === "builtin" && <Badge tone="slate">built-in</Badge>}
       {unmapped && <Badge tone="amber">unmapped</Badge>}
     </div>
   );
