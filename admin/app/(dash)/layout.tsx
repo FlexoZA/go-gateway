@@ -1,13 +1,17 @@
 import { Nav } from "@/components/Nav";
 import { ConfirmProvider } from "@/components/confirm";
+import { DashMain } from "@/components/MappingTest";
+import { MappingTestProvider } from "@/contexts/MappingTest";
 
 export default function DashLayout({ children }: { children: React.ReactNode }) {
   return (
     <ConfirmProvider>
-      <div className="flex min-h-screen">
-        <Nav />
-        <main className="flex-1 overflow-auto p-6 md:p-8">{children}</main>
-      </div>
+      <MappingTestProvider>
+        <div className="flex min-h-screen">
+          <Nav />
+          <DashMain>{children}</DashMain>
+        </div>
+      </MappingTestProvider>
     </ConfirmProvider>
   );
 }
