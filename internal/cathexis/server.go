@@ -98,6 +98,7 @@ type session struct {
 	serial   string
 	model    string
 	approved bool
+	welcomed bool // a welcome has been fully processed; further ones only re-ack
 	// connType is the welcome's connection_type ("control", "event", "video", …).
 	// Only the control connection is registered in the Hub as the command channel
 	// and owns the device's online/sleep state; a device opens several connections
@@ -233,6 +234,14 @@ func (s *session) handleWelcome(ctx context.Context, payload map[string]any) err
 		_ = s.conn.WriteFrame(buildAck())
 	}
 
+	// A device may resend welcome (e.g. it missed the ack). Re-authorizing, re-
+	// registering, and spawning another status poller on every welcome lets one
+	// connection accumulate unbounded goroutines/timers and DB round-trips, so the
+	// heavy work runs once per connection — repeats above only re-ack.
+	if s.welcomed {
+		return nil
+	}
+
 	result, err := s.conn.Deps.Auth.Authorize(ctx, device.RegisterInfo{
 		Serial:   s.serial,
 		Protocol: deviceMake,
@@ -245,9 +254,13 @@ func (s *session) handleWelcome(ctx context.Context, payload map[string]any) err
 		},
 	})
 	if err != nil {
+		// Transient gate error: leave welcomed=false so a later welcome can retry.
 		log.Error(map[string]any{"event": "device_gate_error", "serial": s.serial, "error": err.Error()})
 		return nil
 	}
+	// The authorization decision stands for this connection; don't repeat the heavy
+	// work (or spawn another poller) on subsequent welcomes.
+	s.welcomed = true
 	if !result.Known {
 		s.approved = false
 		log.Info(map[string]any{"event": "unknown_device_quarantined", "serial": s.serial})

@@ -1,9 +1,9 @@
 # Configuration & operations
 
 The gateway runs one or more unit-type plugins in a single process — the default
-`cmd/gateway` build hosts Howen, Fleetiger, and Cathexis; a lean `cmd/<unit>`
-build hosts just one. Configuration is flat and environment-driven. Defaults are
-applied in `internal/core/config`.
+`cmd/gateway` build hosts Howen, Fleetiger, Cathexis, Navtelecom, and JT808/N62; a
+lean `cmd/<unit>` build hosts just one. Configuration is flat and environment-driven.
+Defaults are applied in `internal/core/config`.
 
 ## Environment variables
 
@@ -12,7 +12,7 @@ applied in `internal/core/config`.
 | `GATEWAY` | _(empty)_ | Identifier surfaced in the universal message `gateway` field. **Seeds the `gateway_name` server setting on first run**; thereafter edit it live in the panel (Server Settings → Gateway identity) |
 | `LISTEN_HOST` | `0.0.0.0` | Bind host for both the device TCP server and the HTTP API |
 | `LISTEN_PORT` | `33000` | Generic device TCP port — the **fallback** for a unit that has no port of its own. Per-unit ports override it (see *Per-unit device ports* below). **Seeds the per-unit `device_port` setting on first run**; thereafter the stored value wins and is editable in the panel (Server Settings → Device connection), applied **on next gateway restart** — in Docker also update the published port to match |
-| `<UNIT>_PORT` | _(unit default)_ | Per-unit device TCP port when a process hosts several units: `HOWEN_PORT` (33000), `FLEETIGER_PORT` (8050), `CATHEXIS_PORT` (33010). Overrides `LISTEN_PORT` for that unit; the bundled compose sets all three |
+| `<UNIT>_PORT` | _(unit default)_ | Per-unit device TCP port when a process hosts several units: `HOWEN_PORT` (33000), `FLEETIGER_PORT` (8050), `CATHEXIS_PORT` (32324), `NAVTELECOM_PORT` (4000), `JT808_PORT` (6608). Overrides `LISTEN_PORT` for that unit; the bundled compose sets them all |
 | `HTTP_PORT` | `8080` | Management/control HTTP API port; `0` disables the API |
 | `INTERNAL_API_TOKEN` | _(empty)_ | Shared secret the admin panel uses to authenticate (accepted as a Bearer alongside DB keys). Lets the panel work before any key exists → first-run setup. Set the same value as the admin's `GATEWAY_API_TOKEN` (compose: both from `ADMIN_API_TOKEN`) |
 | `DEVICE_WEBHOOK_URL` | _(empty)_ | Telemetry sink — universal-JSON endpoint that stores all GPS/event data. **Seeds the first `webhooks` row on first run** (with a database, manage one or more webhooks live in the admin panel → Server Settings, each enable/disable). Aliases: `WEBHOOK_URL`, `N8N_WEBHOOK_URL` |
@@ -42,10 +42,11 @@ The bundled compose file also reads `POSTGRES_USER` / `POSTGRES_PASSWORD` /
 
 When a process hosts more than one unit, each binds its own device port,
 resolved per unit as: the admin-editable `device_port` setting → `<UNIT>_PORT`
-env (`HOWEN_PORT`, `FLEETIGER_PORT`, `CATHEXIS_PORT`) → the unit's built-in
-default (Howen 33000, Fleetiger 8050, Cathexis 33010) → `LISTEN_PORT`. Live
-media uses `MEDIA_PORT` similarly. Keep each published Docker port in sync with
-the resolved value.
+env (`HOWEN_PORT`, `FLEETIGER_PORT`, `CATHEXIS_PORT`, `NAVTELECOM_PORT`,
+`JT808_PORT`) → the unit's built-in default (Howen 33000, Fleetiger 8050, Cathexis
+32324, Navtelecom 4000, JT808/N62 6608) → `LISTEN_PORT`. Live media uses
+`MEDIA_PORT` similarly. Keep each published Docker port in sync with the resolved
+value.
 
 ## Two independent auth planes
 
@@ -57,7 +58,7 @@ the resolved value.
 ## Running
 
 ```bash
-# Build + run the multi-unit gateway (Howen + Fleetiger + Cathexis) + PostgreSQL
+# Build + run the multi-unit gateway (all units) + PostgreSQL
 docker compose -f deploy/docker-compose.yml up --build
 
 # Build an image directly. UNIT picks which cmd/ compiles: `gateway` = multi-unit
@@ -69,10 +70,18 @@ Tests run inside the Go image (`make test`); no local Go toolchain required.
 
 ## Management CLIs
 
-All connect via `DATABASE_URL`. With the bundled compose stack:
+All connect via `DATABASE_URL`. The bundled compose stack does **not** publish
+Postgres to the host (by design), so point the CLI at the DB one of these ways:
+
+- **First admin user:** you usually don't need the CLI at all — the admin panel's
+  first-run **setup** page creates the first user while zero users exist.
+- **From the DB host / inside the compose network:** temporarily expose Postgres
+  (`docker compose exec postgres …`) or run with the container's DSN, e.g.
+  `DATABASE_URL=postgres://gateway:<POSTGRES_PASSWORD>@<host>:5432/gateway?sslmode=disable`.
+- **Local dev with a directly-reachable Postgres:**
 
 ```bash
-export DATABASE_URL=postgres://gateway:gateway@localhost:5432/gateway?sslmode=disable
+export DATABASE_URL=postgres://gateway:<POSTGRES_PASSWORD>@localhost:5432/gateway?sslmode=disable
 ```
 
 ### Users — `cmd/adduser`

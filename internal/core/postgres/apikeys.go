@@ -86,7 +86,13 @@ func (s *Store) VerifyAPIKey(ctx context.Context, key string) (bool, error) {
 		}
 		return false, err
 	}
-	_, _ = s.pool.Exec(ctx, `UPDATE api_keys SET last_used_at = now() WHERE id = $1`, id)
+	// Debounce the last_used_at write to at most once a minute per key. Without this,
+	// a hot path like HLS playlist polling (every ~2s per viewer) writes on every
+	// authenticated request — needless DB write amplification for a coarse "last
+	// seen" timestamp. The WHERE keeps it race-safe.
+	_, _ = s.pool.Exec(ctx,
+		`UPDATE api_keys SET last_used_at = now()
+		 WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')`, id)
 	return true, nil
 }
 

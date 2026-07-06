@@ -18,7 +18,9 @@ services:
     container_name: device-gateway-postgres
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-gateway}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-gateway}
+      # Required, no default: the gateway DB holds password/API-key hashes, so a
+      # weak fallback ("gateway") must never slip into production by omission.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your .env}
       - POSTGRES_DB=${POSTGRES_DB:-gateway}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -53,7 +55,7 @@ services:
       # Cathexis control port (the device dials it). Media is served on the next
       # two ports (32325 + 32326) — the old gateway's clip-receiver / live-stream
       # split, handled here by one media listener. See the ports mapping below.
-      - CATHEXIS_PORT=${LISTEN_PORT:-32324}
+      - CATHEXIS_PORT=${CATHEXIS_PORT:-32324}
       # Management/control HTTP API (API-key protected). 0 disables.
       - HTTP_PORT=${HTTP_PORT:-8080}
       # Shared secret the admin panel uses to authenticate (works before any DB
@@ -62,7 +64,7 @@ services:
       # Telemetry sink: the universal-JSON endpoint that stores all GPS/event data.
       - DEVICE_WEBHOOK_URL=${DEVICE_WEBHOOK_URL:-}
       # Gateway's own DB — device-verification registry + per-unit settings/mappings.
-      - DATABASE_URL=postgres://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:-gateway}@postgres:5432/${POSTGRES_DB:-gateway}?sslmode=disable
+      - DATABASE_URL=postgres://${POSTGRES_USER:-gateway}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your .env}@postgres:5432/${POSTGRES_DB:-gateway}?sslmode=disable
       - DEVICE_AUTH_MODE=${DEVICE_AUTH_MODE:-postgres}
       - DEVICE_REJECT_UNKNOWN=${DEVICE_REJECT_UNKNOWN:-true}
       - MAPPING_REFRESH_SECONDS=${MAPPING_REFRESH_SECONDS:-60}
@@ -96,7 +98,7 @@ services:
       - "4000:4000"    # navtelecom
       - "6608:6608"    # jt808 control
       - "6609:6609"    # jt808 media (JT1078 video stream)
-      - "${LISTEN_PORT:-32324}:${LISTEN_PORT:-32324}"                # cathexis control
+      - "${CATHEXIS_PORT:-32324}:${CATHEXIS_PORT:-32324}"            # cathexis control
       - "${VIDEO_LISTEN_PORT:-32325}:${VIDEO_LISTEN_PORT:-32325}"    # cathexis media (clips)
       - "${STREAM_LISTEN_PORT:-32326}:${STREAM_LISTEN_PORT:-32326}"  # cathexis media (live stream)
       - "8080:8080"    # HTTP API
@@ -106,6 +108,14 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    # The distroless image has no shell/curl, so the binary probes its own /healthz
+    # (which also verifies DB connectivity). start_period covers first-boot + DB init.
+    healthcheck:
+      test: ["CMD", "/gateway", "-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
     logging: *default-logging
 
@@ -118,7 +128,8 @@ services:
     image: device-gateway-admin:latest
     container_name: device-gateway-admin
     depends_on:
-      - gateway
+      gateway:
+        condition: service_healthy
     environment:
       - GATEWAY_URL=http://gateway:8080
       - GATEWAY_API_TOKEN=${ADMIN_API_TOKEN:?set ADMIN_API_TOKEN in your .env}
@@ -128,6 +139,13 @@ services:
       - NODE_ENV=production
     ports:
       - "3000:3000"
+    # Next.js standalone runs on node, so probe with a tiny node one-liner.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/login',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
     logging: *default-logging
 

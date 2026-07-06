@@ -17,6 +17,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -75,9 +76,34 @@ type App struct {
 // Run builds and runs an App for the given unit-type protocols, exiting non-zero
 // on fatal error. This is the entire body of a gateway binary's main().
 func Run(protos ...gateway.Protocol) {
+	// `<binary> -healthcheck` is the container HEALTHCHECK probe: the distroless
+	// image has no shell/curl, so the binary probes its own /healthz and exits
+	// 0 (healthy) / 1 (unhealthy). It must run before New (which binds sockets).
+	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
+		os.Exit(healthcheckProbe())
+	}
 	if err := New(protos...).Run(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// healthcheckProbe GETs the local /healthz and returns 0 if it reports healthy
+// (HTTP 200), else 1. Used by the container HEALTHCHECK.
+func healthcheckProbe() int {
+	cfg := config.Load()
+	if cfg.HTTPPort <= 0 {
+		return 0 // API disabled — nothing to probe; treat the process as healthy
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:" + strconv.Itoa(cfg.HTTPPort) + "/healthz")
+	if err != nil {
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return 0
+	}
+	return 1
 }
 
 // New composes an App: loads config, opens the database (if any), wires the shared
@@ -87,6 +113,14 @@ func Run(protos ...gateway.Protocol) {
 func New(protos ...gateway.Protocol) *App {
 	cfg := config.Load()
 	log := logging.New("gateway")
+
+	// Fail closed on an unrecognized auth mode. Without this, a typo like
+	// DEVICE_AUTH_MODE=postgress silently falls through to allow_all — every unknown
+	// device admitted — with no signal. Reject it loudly at startup instead.
+	if cfg.DeviceAuthMode != "allow_all" && cfg.DeviceAuthMode != "postgres" {
+		log.Error(map[string]any{"event": "invalid_device_auth_mode", "value": cfg.DeviceAuthMode, "detail": "must be allow_all or postgres"})
+		os.Exit(1)
+	}
 
 	a := &App{
 		cfg:      cfg,

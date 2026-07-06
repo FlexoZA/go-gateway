@@ -91,6 +91,17 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		body["telemetry"] = s.telemetryStats(ctx)
 		cancel()
 	}
+	if s.hub != nil {
+		devs := s.hub.List()
+		online := 0
+		for _, d := range devs {
+			if d.State == "online" {
+				online++
+			}
+		}
+		body["devices_connected"] = len(devs)
+		body["devices_online"] = online
+	}
 	if s.metrics != nil {
 		if pct, ok := s.metrics.cpu(); ok {
 			body["cpu_percent"] = round1(pct)

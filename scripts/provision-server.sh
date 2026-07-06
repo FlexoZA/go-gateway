@@ -50,7 +50,7 @@ UNIT_UPPER="$(printf '%s' "$UNIT" | tr '[:lower:]' '[:upper:]')"
 case "$UNIT" in
   howen)    DEFAULT_DEVICE_PORT=33000 ;;
   fleetiger) DEFAULT_DEVICE_PORT=8050 ;;
-  cathexis) DEFAULT_DEVICE_PORT=33010 ;;
+  cathexis) DEFAULT_DEVICE_PORT=32324 ;;
   navtelecom) DEFAULT_DEVICE_PORT=4000 ;;
   jt808)    DEFAULT_DEVICE_PORT=6608 ;;
   *)        DEFAULT_DEVICE_PORT=33000 ;;

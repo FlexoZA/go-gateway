@@ -35,7 +35,14 @@ function coerce(meta: N.N62FieldMeta | undefined, v: any): any {
   if (t === "number" || t === "select" || t === "toggle") {
     if (v === "" || v == null) return v;
     const n = Number(v);
-    return Number.isNaN(n) ? v : n;
+    // Never let a non-finite value serialize to JSON null and hit the firmware;
+    // clamp numbers to the field's declared range so out-of-range edits can't
+    // either (min/max were previously dead metadata).
+    if (!Number.isFinite(n)) return "";
+    let c = n;
+    if (typeof meta?.min === "number" && c < meta.min) c = meta.min;
+    if (typeof meta?.max === "number" && c > meta.max) c = meta.max;
+    return c;
   }
   return v;
 }
@@ -520,8 +527,12 @@ function Field({ name, value, meta, onChange }: { name: string; value: any; meta
     <Row label={label} help={meta?.help}>
       <input
         className="input w-48 font-mono"
-        type={type === "password" ? "password" : "text"}
-        inputMode={numeric ? "numeric" : undefined}
+        // A numeric field uses a number input so the browser yields "" (never
+        // free text) for invalid entries — that kept Number(raw)=NaN, which
+        // serialized to JSON null and reached the device firmware.
+        type={numeric ? "number" : type === "password" ? "password" : "text"}
+        min={numeric ? meta?.min : undefined}
+        max={numeric ? meta?.max : undefined}
         value={value == null ? "" : String(value)}
         onChange={(e) => {
           const raw = e.target.value;

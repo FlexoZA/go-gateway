@@ -9,6 +9,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -341,6 +342,9 @@ func (s *Store) Close() {
 	}
 }
 
+// Ping verifies database connectivity, for the /healthz check.
+func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
 // Authorize implements device.Authenticator. Known serials are admitted and
 // touched; unknown serials are auto-provisioned and admitted unless
 // rejectUnknown is set, in which case they are quarantined and rejected.
@@ -356,8 +360,8 @@ func (s *Store) Authorize(ctx context.Context, info device.RegisterInfo) (device
 		}
 		return device.AuthResult{Known: true, Protocol: p}, nil
 	}
-	if err.Error() != "no rows in result set" {
-		// Real query error.
+	if !errors.Is(err, pgx.ErrNoRows) {
+		// Real query error (not just "device not found").
 		return device.AuthResult{}, fmt.Errorf("device lookup: %w", err)
 	}
 
