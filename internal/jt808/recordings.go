@@ -27,9 +27,18 @@ func (s *session) QueryRecordings(ctx context.Context, camera, profile int, star
 	body := []byte{byte(channel)}
 	body = append(body, bcdTimeFromUTC(startUTC, tz)...)
 	body = append(body, bcdTimeFromUTC(endUTC, tz)...)
-	body = append(body, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff) // alarm sign: all
+	// Alarm flag (8 bytes) is a FILTER, not a selector: the device returns only
+	// files whose 0x0200 alarm bits match the ones set here. All-0xFF asks for a
+	// clip that raised every alarm at once, so ordinary continuous recordings
+	// (alarm bits = 0) are excluded and the list comes back empty. Zero = "no
+	// alarm filter", i.e. all footage.
+	body = append(body, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00) // alarm filter: none (all footage)
 	body = append(body, 0x00, 0x00, 0x00)                               // resource A/V, stream all, memory all
 
+	s.log().Debug(map[string]any{
+		"event": "query_recordings", "serial": s.serial, "channel": channel,
+		"start_utc": startUTC, "end_utc": endUTC, "tz_offset": tz,
+	})
 	resp, err := s.request(ctx, msgResourceList, buildFrame(msgResourceQuery, s.phone, s.nextPlatSerial(), body))
 	if err != nil {
 		return nil, err
