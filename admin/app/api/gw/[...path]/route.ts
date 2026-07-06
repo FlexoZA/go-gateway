@@ -23,6 +23,15 @@ async function handle(req: NextRequest, ctx: { params: { path?: string[] } }) {
     const body = await req.text();
     if (body) init.body = body;
   }
+  // Forward range headers so the browser can seek within streamed media (clip
+  // <video> playback) and resume partial downloads. Only these are relayed — the
+  // gateway auth is the server-held key, not anything from the browser request.
+  const fwd = new Headers();
+  for (const h of ["Range", "If-Range"]) {
+    const v = req.headers.get(h);
+    if (v) fwd.set(h, v);
+  }
+  init.headers = fwd;
 
   let res: Response;
   try {
@@ -38,7 +47,7 @@ async function handle(req: NextRequest, ctx: { params: { path?: string[] } }) {
   const headers = new Headers();
   const ct = res.headers.get("Content-Type");
   headers.set("Content-Type", ct || "application/json");
-  for (const h of ["Cache-Control", "Content-Disposition", "Content-Length"]) {
+  for (const h of ["Cache-Control", "Content-Disposition", "Content-Length", "Accept-Ranges", "Content-Range"]) {
     const v = res.headers.get(h);
     if (v) headers.set(h, v);
   }

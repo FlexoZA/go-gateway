@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/components/confirm";
 import { useFetch } from "@/lib/useFetch";
@@ -61,7 +61,26 @@ export function DeviceClips({ serial, sleeping }: { serial: string; sleeping: bo
   const [offsetSecs, setOffsetSecs] = useState(0);
   const [lengthSecs, setLengthSecs] = useState(30);
 
+  // The stored clip currently open in the preview player (null = closed).
+  const [preview, setPreview] = useState<Clip | null>(null);
+
   const clipList = clips.data?.clips ?? [];
+
+  // Close the preview player on Escape.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPreview(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview]);
+
+  // If the open clip disappears (deleted, or its status changes away from ready
+  // on the next poll), close the player so it can't point at a dead file.
+  useEffect(() => {
+    if (preview && !clipList.some((c) => c.id === preview.id && c.status === "ready")) {
+      setPreview(null);
+    }
+  }, [clipList, preview]);
 
   function recKey(rec: Recording) {
     return `${rec.start_utc}-${rec.end_utc}`;
@@ -331,7 +350,10 @@ export function DeviceClips({ serial, sleeping }: { serial: string; sleeping: bo
                   <td className="td">
                     <div className="flex justify-end gap-2">
                       {c.status === "ready" && (
-                        <a className="btn-ghost" href={`/api/gw/clips/${c.id}/download`}>Download</a>
+                        <>
+                          <button className="btn-primary" onClick={() => setPreview(c)}>Preview</button>
+                          <a className="btn-ghost" href={`/api/gw/clips/${c.id}/download`}>Download</a>
+                        </>
                       )}
                       <button className="btn-danger" onClick={() => remove(c.id)}>Delete</button>
                     </div>
@@ -340,6 +362,48 @@ export function DeviceClips({ serial, sleeping }: { serial: string; sleeping: bo
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Preview player — plays the stored .mp4 inline via the BFF proxy (which now
+          forwards Range requests so the <video> can seek). */}
+      {preview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPreview(null)}
+        >
+          <div
+            className="w-full max-w-3xl rounded-lg border border-edge bg-panel p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-sm text-slate-300">
+                <span className="font-medium text-white">
+                  Cam {preview.camera + 1} · {preview.profile === 0 ? "high" : "low"}
+                </span>
+                <span className="ml-2 text-slate-400">
+                  {fmtUtc(preview.start_utc)} → {fmtUtc(preview.end_utc)} · {preview.duration_secs}s
+                </span>
+              </div>
+              <button className="btn-ghost" onClick={() => setPreview(null)} aria-label="Close">
+                ✕
+              </button>
+            </div>
+            <video
+              key={preview.id}
+              className="w-full rounded bg-black"
+              src={`/api/gw/clips/${preview.id}/download`}
+              controls
+              autoPlay
+              playsInline
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <a className="btn-ghost" href={`/api/gw/clips/${preview.id}/download`}>Download</a>
+              <button className="btn-primary" onClick={() => setPreview(null)}>Close</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
