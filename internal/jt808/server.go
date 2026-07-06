@@ -15,6 +15,7 @@ package jt808
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -339,6 +340,14 @@ func (s *session) OnFrame(ctx context.Context, f gateway.Frame) error {
 	case msgResourceList:
 		// Unsolicited recording-list reply to a 0x9205 query; no platform ack.
 		recs := parseResourceList(body, s.tzOffset())
+		total := -1
+		if len(body) >= 6 {
+			total = int(binary.BigEndian.Uint32(body[2:6]))
+		}
+		s.log().Debug(map[string]any{
+			"event": "resource_list", "serial": s.serial,
+			"body_len": len(body), "device_total": total, "parsed": len(recs),
+		})
 		s.deliverPending(msgResourceList, map[string]any{"recordings": recs})
 		return nil
 	case msgTermAttrs:
