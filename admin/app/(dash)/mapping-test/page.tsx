@@ -17,7 +17,7 @@ import { Badge, Empty, ErrorBanner, PageHeader } from "@/components/ui";
 // are buffered), then polling /api/logs/live filtered to the chosen serial. The
 // previous capture level is restored when the test stops.
 
-type Unit = { serial: string; protocol: string; model: string; state?: string };
+type Unit = { serial: string; protocol: string; model: string; state?: string; commands?: string[] };
 
 type TraceEntry = {
   ec?: number;
@@ -56,6 +56,7 @@ export default function MappingTestPage() {
   const [events, setEvents] = useState<Fired[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [waking, setWaking] = useState(false);
 
   const cursor = useRef(0);
   const prevLevel = useRef<string | null>(null);
@@ -65,6 +66,28 @@ export default function MappingTestPage() {
   const deviceList = (units.data?.units ?? []).filter((u) => capsForUnit(info, u.protocol)?.has_mappings !== false);
   const effectiveSerial = serial || deviceList[0]?.serial || "";
   const selected = deviceList.find((u) => u.serial === effectiveSerial);
+  const sleeping = selected?.state === "sleep";
+  const canWake = !!selected?.commands?.includes("wake_device");
+
+  // Waking a standby device sends wake_device; the 8s units poll then reflects it
+  // coming online, at which point it can receive triggered events.
+  async function wake() {
+    if (!effectiveSerial) return;
+    setWaking(true);
+    setError(null);
+    try {
+      await api(`units/${encodeURIComponent(effectiveSerial)}/commands`, {
+        method: "POST",
+        body: JSON.stringify({ type: "wake_device" }),
+      });
+      setNote("Wake sent — give the device a few seconds to come out of standby.");
+      await units.refresh();
+    } catch (e: any) {
+      setError(e.message || "Failed to wake device");
+    } finally {
+      setWaking(false);
+    }
+  }
 
   const stop = useCallback(async () => {
     setRunning(false);
@@ -172,8 +195,18 @@ export default function MappingTestPage() {
             ))}
           </select>
         </div>
-        {selected?.state === "sleep" && (
-          <span className="pb-2 text-xs text-amber-300">⚠ Device is in standby — wake it (Devices page) to receive events.</span>
+        {sleeping && (
+          <div className="flex items-center gap-2 pb-1">
+            <span className="text-xs text-amber-300">⚠ Device is in standby — wake it to receive events.</span>
+            <button
+              className="btn-primary"
+              onClick={wake}
+              disabled={!canWake || waking}
+              title={canWake ? undefined : "This device can't be woken remotely"}
+            >
+              {waking ? "Waking…" : "Wake device"}
+            </button>
+          </div>
         )}
         <div className="grow" />
         {running ? (

@@ -60,6 +60,85 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="card text-center text-sm text-slate-400">{children}</div>;
 }
 
+// SearchInput is a controlled text field with a leading magnifier, for filtering
+// a table client-side. Size it via `className` (the input fills the wrapper).
+export function SearchInput({
+  value,
+  onChange,
+  placeholder = "Search…",
+  className = "",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  return (
+    <div className={`relative ${className}`}>
+      <svg
+        className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        aria-hidden="true"
+      >
+        <circle cx="9" cy="9" r="6" />
+        <path d="m14 14 4 4" strokeLinecap="round" />
+      </svg>
+      <input
+        type="search"
+        className="input pl-9"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={placeholder}
+      />
+    </div>
+  );
+}
+
+// Pagination shows a "Showing X–Y of Z" summary and Prev/Next controls. The
+// controls only appear when there's more than one page; the summary always shows.
+export function Pagination({
+  page,
+  pageCount,
+  total,
+  start,
+  count,
+  onPage,
+  noun = "items",
+}: {
+  page: number;
+  pageCount: number;
+  total: number;
+  start: number;
+  count: number;
+  onPage: (p: number) => void;
+  noun?: string;
+}) {
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-400">
+      <span>
+        {total === 0 ? `No ${noun}` : `Showing ${start + 1}–${start + count} of ${total} ${noun}`}
+      </span>
+      {pageCount > 1 && (
+        <div className="flex items-center gap-2">
+          <button className="btn-ghost" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+            Prev
+          </button>
+          <span className="tabular-nums">
+            Page {page} / {pageCount}
+          </span>
+          <button className="btn-ghost" disabled={page >= pageCount} onClick={() => onPage(page + 1)}>
+            Next
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Spinner() {
   return <div className="text-sm text-slate-400">Loading…</div>;
 }

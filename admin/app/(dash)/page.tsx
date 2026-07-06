@@ -5,7 +5,8 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
-import { Badge, ConfirmDialog, Empty, ErrorBanner, PageHeader, Spinner, statusTone } from "@/components/ui";
+import { useTableSearch } from "@/lib/useTableSearch";
+import { Badge, ConfirmDialog, Empty, ErrorBanner, PageHeader, Pagination, SearchInput, Spinner, statusTone } from "@/components/ui";
 
 type Unit = {
   serial: string;
@@ -36,6 +37,13 @@ export default function DashboardPage() {
   const metrics = useFetch<Metrics>("metrics", 5000);
 
   const connected = units.data?.units ?? [];
+  const search = useTableSearch(
+    connected,
+    (u, q) =>
+      u.serial.toLowerCase().includes(q) ||
+      (u.model?.toLowerCase().includes(q) ?? false) ||
+      u.protocol.toLowerCase().includes(q),
+  );
   const portList = ports.data?.ports ?? [];
   const standby = connected.filter((u) => u.state === "sleep").length;
   const streamCount = streams.data?.count ?? 0;
@@ -130,12 +138,25 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <h2 className="mb-3 text-sm font-semibold text-slate-300">Connected devices</h2>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold text-slate-300">Connected devices</h2>
+        {connected.length > 0 && (
+          <SearchInput
+            value={search.query}
+            onChange={search.setQuery}
+            placeholder="Search serial, model, type…"
+            className="w-72"
+          />
+        )}
+      </div>
       {units.loading ? (
         <Spinner />
       ) : connected.length === 0 ? (
         <Empty>No devices are currently connected.</Empty>
+      ) : search.total === 0 ? (
+        <Empty>No connected devices match “{search.query}”.</Empty>
       ) : (
+        <>
         <div className="card overflow-x-auto p-0">
           <table className="min-w-full divide-y divide-edge">
             <thead>
@@ -151,7 +172,7 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-edge">
-              {connected.map((u) => (
+              {search.pageItems.map((u) => (
                 <tr key={u.serial}>
                   <td className="td font-mono">
                     <Link href={`/devices/${encodeURIComponent(u.serial)}`} className="text-indigo-300 hover:underline">
@@ -169,19 +190,27 @@ export default function DashboardPage() {
                     <Badge tone="slate">{u.commands?.length ?? 0} cmds</Badge>
                   </td>
                   <td className="td text-right">
-                    {capsForUnit(info, u.protocol)?.has_video !== false ? (
-                      <Link href={`/live/${encodeURIComponent(u.serial)}`} className="btn-primary">
-                        Live view
-                      </Link>
-                    ) : (
-                      <span className="text-slate-500">—</span>
-                    )}
+                    <VideoCell
+                      unit={u}
+                      hasVideo={capsForUnit(info, u.protocol)?.has_video !== false}
+                      onWoke={units.refresh}
+                    />
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={search.page}
+          pageCount={search.pageCount}
+          total={search.total}
+          start={search.start}
+          count={search.pageItems.length}
+          onPage={search.setPage}
+          noun="devices"
+        />
+        </>
       )}
       <ConfirmDialog
         open={confirmStop}
@@ -203,6 +232,57 @@ export default function DashboardPage() {
           </div>
         )}
       </ConfirmDialog>
+    </div>
+  );
+}
+
+// VideoCell renders the per-device action in the Video column. A connected device
+// gets a "Live view" link; a device in standby that advertises the wake_device
+// command gets a "Wake device" button instead (waking clears the standby state on
+// the next units poll). A standby device that can't be woken shows the button
+// disabled so it's clear no action is available.
+function VideoCell({ unit, hasVideo, onWoke }: { unit: Unit; hasVideo: boolean; onWoke: () => void }) {
+  const [waking, setWaking] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (!hasVideo) return <span className="text-slate-500">—</span>;
+
+  if (unit.state !== "sleep") {
+    return (
+      <Link href={`/live/${encodeURIComponent(unit.serial)}`} className="btn-primary">
+        Live view
+      </Link>
+    );
+  }
+
+  const canWake = !!unit.commands?.includes("wake_device");
+  async function wake() {
+    setWaking(true);
+    setErr(null);
+    try {
+      await api(`units/${encodeURIComponent(unit.serial)}/commands`, {
+        method: "POST",
+        body: JSON.stringify({ type: "wake_device" }),
+      });
+      onWoke();
+    } catch (e: any) {
+      setErr(e.message || "Failed to wake device");
+    } finally {
+      setWaking(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        className="btn-primary"
+        onClick={wake}
+        disabled={!canWake || waking}
+        title={canWake ? undefined : "This device can't be woken remotely"}
+      >
+        {waking ? "Waking…" : "Wake device"}
+      </button>
+      {err && <span className="text-xs text-rose-300">{err}</span>}
     </div>
   );
 }

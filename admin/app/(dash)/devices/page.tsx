@@ -5,7 +5,8 @@ import { useState } from "react";
 import { useConfirm } from "@/components/confirm";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
-import { Badge, Empty, ErrorBanner, PageHeader, Spinner, statusTone } from "@/components/ui";
+import { useTableSearch } from "@/lib/useTableSearch";
+import { Badge, Empty, ErrorBanner, PageHeader, Pagination, SearchInput, Spinner, statusTone } from "@/components/ui";
 
 type Device = { serial: string; protocol: string; status: string; first_seen_at: string; last_seen_at: string };
 type Pending = { serial: string; protocol_guess: string; remote_ip: string; last_seen_at: string };
@@ -32,6 +33,13 @@ export default function DevicesPage() {
 
   const pendingList = pending.data?.devices ?? [];
   const approvedList = approved.data?.devices ?? [];
+  const search = useTableSearch(
+    approvedList,
+    (d, q) =>
+      d.serial.toLowerCase().includes(q) ||
+      (d.protocol?.toLowerCase().includes(q) ?? false) ||
+      (d.status?.toLowerCase().includes(q) ?? false),
+  );
 
   return (
     <div>
@@ -93,12 +101,25 @@ export default function DevicesPage() {
         </div>
       )}
 
-      <h2 className="mb-3 text-sm font-semibold text-slate-300">Approved devices</h2>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold text-slate-300">Approved devices</h2>
+        {approvedList.length > 0 && (
+          <SearchInput
+            value={search.query}
+            onChange={search.setQuery}
+            placeholder="Search serial, protocol, status…"
+            className="w-72"
+          />
+        )}
+      </div>
       {approved.loading ? (
         <Spinner />
       ) : approvedList.length === 0 ? (
         <Empty>No devices in the registry yet.</Empty>
+      ) : search.total === 0 ? (
+        <Empty>No approved devices match “{search.query}”.</Empty>
       ) : (
+        <>
         <div className="card overflow-x-auto p-0">
           <table className="min-w-full divide-y divide-edge">
             <thead>
@@ -112,7 +133,7 @@ export default function DevicesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-edge">
-              {approvedList.map((d) => (
+              {search.pageItems.map((d) => (
                 <tr key={d.serial}>
                   <td className="td font-mono">
                     <Link href={`/devices/${encodeURIComponent(d.serial)}`} className="text-indigo-300 hover:underline">
@@ -151,6 +172,16 @@ export default function DevicesPage() {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={search.page}
+          pageCount={search.pageCount}
+          total={search.total}
+          start={search.start}
+          count={search.pageItems.length}
+          onPage={search.setPage}
+          noun="devices"
+        />
+        </>
       )}
     </div>
   );
