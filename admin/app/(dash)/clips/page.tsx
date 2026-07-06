@@ -4,8 +4,9 @@ import { Fragment, useState } from "react";
 import { api } from "@/lib/api";
 import { useConfirm } from "@/components/confirm";
 import { useFetch } from "@/lib/useFetch";
+import { usePagination } from "@/lib/usePagination";
 import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
-import { Badge, Empty, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Empty, ErrorBanner, PageHeader, Pagination, Spinner } from "@/components/ui";
 
 type Unit = { serial: string; protocol: string; model: string; state?: string };
 type Recording = {
@@ -101,6 +102,7 @@ export default function ClipsPage() {
   const selectedUnit = unitList.find((u) => u.serial === effectiveSerial);
   const sleeping = selectedUnit?.state === "sleep";
   const [waking, setWaking] = useState(false);
+  const storedPg = usePagination(clipList);
 
   async function wakeDevice() {
     if (!effectiveSerial) return;
@@ -359,6 +361,7 @@ export default function ClipsPage() {
       ) : clipList.length === 0 ? (
         <Empty>No clips yet. Find a recording above and pull it.</Empty>
       ) : (
+        <>
         <div className="card overflow-x-auto p-0">
           <table className="min-w-full divide-y divide-edge">
             <thead>
@@ -373,7 +376,7 @@ export default function ClipsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-edge">
-              {clipList.map((c) => (
+              {storedPg.pageItems.map((c) => (
                 <tr key={c.id}>
                   <td className="td font-mono">{c.serial}</td>
                   <td className="td">Cam {c.camera + 1} · {c.profile === 0 ? "high" : "low"}</td>
@@ -400,6 +403,16 @@ export default function ClipsPage() {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={storedPg.page}
+          pageCount={storedPg.pageCount}
+          total={storedPg.total}
+          start={storedPg.start}
+          count={storedPg.pageItems.length}
+          onPage={storedPg.setPage}
+          noun="clips"
+        />
+        </>
       )}
     </div>
   );
