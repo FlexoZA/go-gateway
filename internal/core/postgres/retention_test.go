@@ -78,3 +78,67 @@ func (s *Store) CountClipsForTest(ctx context.Context) (int64, error) {
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM clips`).Scan(&n)
 	return n, err
 }
+
+// TestDeleteErrorsOlderThan is a live-DB test (skipped without DATABASE_URL) for the
+// error-log reaper's delete-by-age queries: only rows created before the cutoff are
+// removed, and the deleted-row count is returned.
+func TestDeleteErrorsOlderThan(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping live-DB integration test")
+	}
+	ctx := context.Background()
+	s, err := New(ctx, dsn, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.pool.Exec(ctx, `TRUNCATE gateway_errors, device_errors`); err != nil {
+		t.Fatal(err)
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -30)
+
+	// gateway_errors: one aged 40 days, one fresh.
+	if err := s.RecordGatewayError(ctx, "gateway", "tcp/howen", "boom", "old", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE gateway_errors SET created_at = now() - interval '40 days'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordGatewayError(ctx, "gateway", "tcp/howen", "boom", "new", nil); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.DeleteGatewayErrorsOlderThan(ctx, cutoff, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("deleted gateway_errors = %d, want 1", n)
+	}
+	var remaining int64
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM gateway_errors`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 1 {
+		t.Fatalf("remaining gateway_errors = %d, want 1 (the recent one)", remaining)
+	}
+
+	// device_errors: same shape.
+	if err := s.RecordDeviceError(ctx, "SER", "upload", "old", "1.2.3.4", 5000, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE device_errors SET created_at = now() - interval '40 days'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordDeviceError(ctx, "SER", "upload", "new", "1.2.3.4", 5000, nil); err != nil {
+		t.Fatal(err)
+	}
+	dn, err := s.DeleteDeviceErrorsOlderThan(ctx, cutoff, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dn != 1 {
+		t.Fatalf("deleted device_errors = %d, want 1", dn)
+	}
+}

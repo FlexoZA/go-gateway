@@ -548,6 +548,14 @@ func (a *App) startStoreBackedServices(ctx context.Context) {
 		a.startMediaRetention(ctx)
 	}
 
+	// Error-log retention: seed the days default on first run, then run a background
+	// reaper that deletes gateway_errors/device_errors rows older than the (live-
+	// editable) setting so the error tables can't grow without bound.
+	if err := a.store.SeedSettingDefault(ctx, postgres.SettingErrorLogRetentionDays, strconv.Itoa(a.cfg.ErrorLogRetentionDays)); err != nil {
+		a.log.Error(map[string]any{"event": "error_log_retention_seed_failed", "error": err.Error()})
+	}
+	a.startErrorLogRetention(ctx)
+
 	// Scheduled gateway-DB backups: seed the schedule settings on first run and run
 	// the daily backup scheduler. The manager is created in New (needs the store).
 	if a.backups != nil {
@@ -856,6 +864,83 @@ func (a *App) mediaRetentionDays(ctx context.Context) int {
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 0 {
 		return a.cfg.MediaRetentionDays
+	}
+	return n
+}
+
+// startErrorLogRetention runs a background reaper that deletes gateway_errors and
+// device_errors rows older than the error_log_retention_days setting, bounding the
+// error tables' growth. It sweeps at startup and then every mediaRetentionInterval,
+// reading the (live-editable) retention setting each sweep.
+func (a *App) startErrorLogRetention(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(mediaRetentionInterval)
+		defer t.Stop()
+		a.reapErrorLogs(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				a.reapErrorLogs(ctx)
+			}
+		}
+	}()
+}
+
+// reapErrorLogs deletes gateway/device error rows older than the retention window.
+// A setting of 0 (or unset) disables reaping (keep forever).
+func (a *App) reapErrorLogs(ctx context.Context) {
+	days := a.errorLogRetentionDays(ctx)
+	if days <= 0 {
+		return
+	}
+	cutoff := time.Now().AddDate(0, 0, -days)
+	gw := a.reapErrorRows(ctx, "gateway_error_reap_failed", cutoff, a.store.DeleteGatewayErrorsOlderThan)
+	dev := a.reapErrorRows(ctx, "device_error_reap_failed", cutoff, a.store.DeleteDeviceErrorsOlderThan)
+	if gw+dev > 0 {
+		a.log.Info(map[string]any{"event": "error_logs_reaped", "gateway_errors": gw, "device_errors": dev, "retention_days": days})
+	}
+}
+
+// reapErrorRows deletes rows via del in batches until fewer than a full batch come
+// back, and returns how many were removed. failEvent names the log line emitted on
+// a delete error.
+func (a *App) reapErrorRows(ctx context.Context, failEvent string, cutoff time.Time, del func(context.Context, time.Time, int) (int64, error)) int64 {
+	const batch = 1000
+	var total int64
+	for ctx.Err() == nil {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		n, err := del(cctx, cutoff, batch)
+		cancel()
+		if err != nil {
+			a.log.Error(map[string]any{"event": failEvent, "error": err.Error()})
+			return total
+		}
+		total += n
+		if n < batch {
+			break
+		}
+	}
+	return total
+}
+
+// errorLogRetentionDays reads the current error_log_retention_days setting, falling
+// back to the env-seeded default if the row is missing or unparseable.
+func (a *App) errorLogRetentionDays(ctx context.Context) int {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	v, ok, err := a.store.GetSetting(cctx, postgres.SettingErrorLogRetentionDays)
+	if err != nil {
+		a.log.Debug(map[string]any{"event": "error_log_retention_read_failed", "error": err.Error()})
+		return a.cfg.ErrorLogRetentionDays
+	}
+	if !ok {
+		return a.cfg.ErrorLogRetentionDays
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return a.cfg.ErrorLogRetentionDays
 	}
 	return n
 }

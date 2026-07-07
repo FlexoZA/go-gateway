@@ -38,6 +38,11 @@ const SettingDeviceRejectUnknown = "device_reject_unknown"
 // Edited live in the admin Server Settings; applied on the next hourly sweep.
 const SettingMediaRetentionDays = "media_retention_days"
 
+// SettingErrorLogRetentionDays is how many days gateway_errors and device_errors
+// rows are kept before the error-log reaper deletes them. "0" keeps them forever.
+// Edited live in the admin Server Settings; applied on the next hourly sweep.
+const SettingErrorLogRetentionDays = "error_log_retention_days"
+
 // Scheduled gateway-DB backup settings (edited live in the admin Server Settings):
 //
 //	backup_enabled   — "true"/"false": run the daily backup.

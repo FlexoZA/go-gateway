@@ -69,6 +69,10 @@ export default function ServerSettingsPage() {
         {settings.data?.settings.some((s) => s.key === "media_retention_days") && (
           <MediaRetentionCard current={settingVal("media_retention_days")} onSaved={settings.refresh} />
         )}
+        {/* Only shown on a gateway with a database (the setting is seeded only then). */}
+        {settings.data?.settings.some((s) => s.key === "error_log_retention_days") && (
+          <ErrorLogRetentionCard current={settingVal("error_log_retention_days")} onSaved={settings.refresh} />
+        )}
         {/* Only shown when scheduled backups are configured (setting seeded). */}
         {settings.data?.settings.some((s) => s.key === "backup_enabled") && (
           <BackupsCard
@@ -465,6 +469,73 @@ function MediaRetentionCard({ current, onSaved }: { current: string; onSaved: ()
       </div>
       {!valid && <p className="text-xs text-rose-300">Enter a whole number of days between 0 and 3650.</p>}
       {valid && days === 0 && <p className="text-xs text-amber-300">Keeping clips forever — watch disk usage.</p>}
+    </div>
+  );
+}
+
+function ErrorLogRetentionCard({ current, onSaved }: { current: string; onSaved: () => void }) {
+  const [value, setValue] = useState(current);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setValue(current);
+  }, [current]);
+
+  const dirty = value.trim() !== current.trim();
+  const days = Number(value);
+  const valid = Number.isInteger(days) && days >= 0 && days <= 3650;
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await api("settings", { method: "PUT", body: JSON.stringify({ key: "error_log_retention_days", value: String(days) }) });
+      setSaved(true);
+      onSaved();
+    } catch (e: any) {
+      setError(e.message || "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-white">Error log retention</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          How long gateway and device error log rows are kept in the database before they’re automatically deleted. Set{" "}
+          <span className="font-mono text-slate-200">0</span> to keep them forever. Cleanup runs hourly.
+        </p>
+      </div>
+
+      {error && <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</div>}
+      {saved && !dirty && (
+        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">Saved.</div>
+      )}
+
+      <div className="flex items-end gap-3">
+        <div className="w-40">
+          <label className="text-xs text-slate-400">Retention (days)</label>
+          <input
+            className="input mt-1"
+            type="number"
+            min={0}
+            max={3650}
+            step={1}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+        </div>
+        <button className="btn-primary" onClick={save} disabled={!dirty || busy || !valid}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {!valid && <p className="text-xs text-rose-300">Enter a whole number of days between 0 and 3650.</p>}
+      {valid && days === 0 && <p className="text-xs text-amber-300">Keeping error logs forever — watch disk usage.</p>}
     </div>
   );
 }

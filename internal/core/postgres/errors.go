@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/dfm/device-gateway/internal/core/logging"
@@ -45,6 +46,41 @@ func (s *Store) RecordDeviceError(ctx context.Context, serial, category, message
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		serial, nullIfEmpty(category), message, nullIfEmpty(remoteAddr), nullIfZero(remotePort), payload)
 	return err
+}
+
+// DeleteGatewayErrorsOlderThan deletes up to limit gateway_errors rows created
+// before cutoff and returns how many were removed. Batched (via limit) so a large
+// backlog is reaped in chunks rather than one giant statement.
+func (s *Store) DeleteGatewayErrorsOlderThan(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM gateway_errors WHERE id IN (
+		    SELECT id FROM gateway_errors WHERE created_at < $1 ORDER BY id LIMIT $2
+		 )`,
+		cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("delete old gateway errors: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// DeleteDeviceErrorsOlderThan deletes up to limit device_errors rows created before
+// cutoff and returns how many were removed. Batched like the gateway variant.
+func (s *Store) DeleteDeviceErrorsOlderThan(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM device_errors WHERE id IN (
+		    SELECT id FROM device_errors WHERE created_at < $1 ORDER BY id LIMIT $2
+		 )`,
+		cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("delete old device errors: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // StartErrorLogSink returns a logging.ErrorSink that persists every Error-level

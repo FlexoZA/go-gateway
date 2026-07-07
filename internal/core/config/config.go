@@ -112,6 +112,13 @@ type Config struct {
 	// Server Settings; this env value only sets the initial default. Default 30.
 	MediaRetentionDays int
 
+	// ErrorLogRetentionDays SEEDS the error_log_retention_days server setting on first
+	// run: how many days gateway_errors/device_errors rows are kept before the
+	// error-log reaper deletes them. 0 = keep forever. Thereafter it is edited live in
+	// the admin Server Settings; this env value only sets the initial default.
+	// Default 30.
+	ErrorLogRetentionDays int
+
 	// BackupsRoot is the directory scheduled gateway-DB backups are written to.
 	// Back it with a persistent volume. Empty disables backups entirely.
 	BackupsRoot string
@@ -161,6 +168,7 @@ func Load() Config {
 		FFmpegPath:                 getenv("FFMPEG_PATH", "ffmpeg"),
 		ClipsRoot:                  getenv("CLIPS_ROOT", "/var/lib/gateway/clips"),
 		MediaRetentionDays:         getenvInt("MEDIA_RETENTION_DAYS", 30),
+		ErrorLogRetentionDays:      getenvInt("ERROR_LOG_RETENTION_DAYS", 30),
 		BackupsRoot:                getenv("BACKUPS_ROOT", "/var/lib/gateway/backups"),
 		BackupEnabled:              getenvBool("BACKUP_ENABLED", true),
 		BackupTime:                 getenv("BACKUP_TIME", "02:00"),
