@@ -7,6 +7,7 @@ import { useFetch } from "@/lib/useFetch";
 import { usePagination } from "@/lib/usePagination";
 import { useGatewayInfo, capsForUnit } from "@/lib/useGatewayInfo";
 import { Badge, Empty, ErrorBanner, PageHeader, Pagination, Spinner } from "@/components/ui";
+import { ExpiryBadge, useMediaRetentionDays } from "@/lib/retention";
 
 type Unit = { serial: string; protocol: string; model: string; state?: string };
 type Recording = {
@@ -31,6 +32,7 @@ type Clip = {
   file_size: number;
   bytes_received: number;
   error?: string;
+  created_at: string;
 };
 
 // datetime-local value (YYYY-MM-DDTHH:mm) in local wall-clock.
@@ -49,6 +51,7 @@ export default function ClipsPage() {
   const caps = info?.capabilities;
   const units = useFetch<{ units: Unit[] }>("units", 8000);
   const clips = useFetch<{ clips: Clip[] }>("clips", 4000);
+  const retentionDays = useMediaRetentionDays();
   const range = defaultRange();
   const confirm = useConfirm();
 
@@ -388,6 +391,11 @@ export default function ClipsPage() {
                       <span className="ml-2 text-xs text-slate-400">{fmtBytes(c.bytes_received)}</span>
                     )}
                     {c.status === "error" && c.error && <span className="ml-2 text-xs text-rose-300">{c.error}</span>}
+                    {c.status === "ready" && (
+                      <span className="ml-2">
+                        <ExpiryBadge createdAt={c.created_at} retentionDays={retentionDays} />
+                      </span>
+                    )}
                   </td>
                   <td className="td text-slate-400">{c.file_size > 0 ? fmtBytes(c.file_size) : "—"}</td>
                   <td className="td">

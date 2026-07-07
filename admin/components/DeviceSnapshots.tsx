@@ -5,6 +5,7 @@ import { api, apiBinary } from "@/lib/api";
 import { useFetch } from "@/lib/useFetch";
 import { useConfirm } from "@/components/confirm";
 import { Empty, ErrorBanner, Spinner } from "@/components/ui";
+import { ExpiryBadge, useMediaRetentionDays } from "@/lib/retention";
 
 // Resolution codes per the Howen H-Protocol snapshot request (0x4020 `res`).
 const RESOLUTIONS: { value: number; label: string }[] = [
@@ -396,6 +397,7 @@ function GatewayPanel({
 }) {
   const confirm = useConfirm();
   const [error, setError] = useState<string | null>(null);
+  const retentionDays = useMediaRetentionDays();
   const list = saved.data?.snapshots ?? [];
 
   function view(s: GatewaySnapshot) {
@@ -443,7 +445,12 @@ function GatewayPanel({
             <tbody className="divide-y divide-edge">
               {list.map((s) => (
                 <tr key={s.id}>
-                  <td className="td font-mono">{fmtUtc(s.captured_utc)}</td>
+                  <td className="td font-mono">
+                    {fmtUtc(s.captured_utc)}
+                    <span className="ml-2">
+                      <ExpiryBadge createdAt={s.created_at} retentionDays={retentionDays} />
+                    </span>
+                  </td>
                   <td className="td text-slate-400">Cam {s.camera + 1}</td>
                   <td className="td text-slate-400">{s.kind || "—"}</td>
                   <td className="td text-slate-400 capitalize">{s.source}</td>
