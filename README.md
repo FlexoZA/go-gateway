@@ -77,9 +77,13 @@ once regardless of how many sinks are active.
 
 ### The gateway database (PostgreSQL)
 
-PostgreSQL is the gateway's own state — **not** a telemetry store. Today it holds
-the unit registry used to verify connecting devices (`devices` /
-`unknown_devices`); server-settings tables will be added here later.
+PostgreSQL is the gateway's own state — **not** a telemetry store. It holds the
+unit registry used to verify connecting devices (`devices` / `unknown_devices`),
+editable `event_mappings`, `users` and `api_keys`, live `server_settings` /
+`unit_settings`, clip and snapshot metadata (`clips` / `snapshots`), the durable
+`webhook_outbox`, and gateway/device error logs. See
+[docs/database.md](docs/database.md) for the full schema; the core registry and
+auth tables are:
 
 ```sql
 devices(serial PK, protocol, status, first_seen_at, last_seen_at)
@@ -115,11 +119,14 @@ The gateway exposes a management/control HTTP API on `HTTP_PORT` (default 8080;
 `0` disables). `GET /healthz` is public; everything under `/api/` requires
 `Authorization: Bearer <api-key>`.
 
-Endpoints:
+Core control endpoints (the full surface — devices, mappings, clips, snapshots,
+settings, logs, backups, webhooks, streaming — is in
+[docs/http-api.md](docs/http-api.md)):
 
 | Method & path | Purpose |
 |---|---|
 | `GET /healthz` | Liveness (public) |
+| `GET /api/gateway/info` | Gateway + effective per-unit capabilities (drives the admin UI) |
 | `GET /api/units` | List currently-connected devices (+ each one's supported commands) |
 | `GET /api/units/{serial}` | One connected device's info (404 if not connected) |
 | `POST /api/units/{serial}/commands` | Send a control command; body `{"type":"...","payload":{...}}` |
@@ -187,7 +194,9 @@ node tools/gen-webhook-golden.mjs /path/to/dfm-mvr-gateway
 
 ```
 cmd/gateway/main.go            multi-unit entrypoint: app.Run(howen, fleetiger, cathexis, navtelecom, jt808)
-cmd/howen/main.go              lean single-unit entrypoint: app.Run(howen.New())
+cmd/howen/ … cmd/jt808/        lean single-unit entrypoints: app.Run(<unit>.New())
+cmd/adduser, cmd/apikey        management CLIs (create users / mint API keys)
+cmd/backup                     one-shot gateway-DB backup CLI
 internal/
   core/                        protocol-agnostic framework
     app/                       composition root: wires deps around a Protocol, app.Run()
@@ -196,17 +205,23 @@ internal/
     device/                    serial normalization + pluggable authorization
     message/                   universal message builder (+ golden parity test)
     mapping/                   neutral type for editable code->event tables
-    postgres/                  gateway DB: devices, event_mappings, users, api_keys
-    webhook/                   telemetry sink (universal-JSON HTTP)
+    eventcodes/                canonical Standard-Event-Code catalogue
+    postgres/                  gateway DB: devices, event_mappings, users, api_keys, settings, clips, …
+    webhook/                   telemetry sink (universal-JSON HTTP) + durable outbox
     httpapi/                   management/control HTTP API + Bearer API-key middleware
+    media/                     shared media plumbing (HLS via ffmpeg, clip/snapshot storage)
+    backup/                    scheduled gateway-DB backups + retention
     gateway/                   TCP accept loop, Conn.Emit, Hub, Protocol/Sink/Commander ifaces
-  howen/                       Howen H-Protocol plugin
+  howen/                       Howen H-Protocol plugin (full-featured reference)
     codec.go                   frame I/O + binary status/alarm decoding
     events.go                  event-code maps (DB-editable; raw Howen -> ACM codes)
     gps.go                     status -> normalized payload
     server.go                  Protocol + Session: registration, GPS, alarms
+    video.go/media.go          live HLS + recorded-clip ingest; config/status/snapshot.go
   fleetiger/                   GT06-style GPS tracker plugin (GPS-only)
   cathexis/                    MVR video + config plugin
+  navtelecom/                  NTCB/FLEX GPS+IO plugin (GPS-only today)
+  jt808/                       JT/T 808-2019 (N62 dashcam): GPS/events/config/status/commands + JT1078 video
 deploy/                        Dockerfile (generic, UNIT build arg) + compose
 scripts/new-gateway.sh         scaffold a new unit type's code
 scripts/provision-server.sh    stand up a server for an existing unit
@@ -256,7 +271,8 @@ mappings in `commands.go`/`events.go`).
 ## Quick start
 
 ```bash
-# Build and run the multi-unit gateway (howen + fleetiger + cathexis) + PostgreSQL
+# Build and run the multi-unit gateway (howen + fleetiger + cathexis + navtelecom
+# + jt808) + PostgreSQL + the admin panel
 docker compose -f deploy/docker-compose.yml up --build
 
 # inspect the unit registry (telemetry itself goes to the webhook)
@@ -280,20 +296,37 @@ docker run -p 33000:33000 \
 
 All configuration is environment-driven and flat — no per-unit config branching.
 A multi-unit process shares one config; each unit takes its own device port via
-`<UNIT>_PORT` (e.g. `HOWEN_PORT`, `FLEETIGER_PORT`, `CATHEXIS_PORT`).
+`<UNIT>_PORT` (e.g. `HOWEN_PORT`, `FLEETIGER_PORT`, `NAVTELECOM_PORT`,
+`JT808_PORT`, `CATHEXIS_PORT`), falling back to the generic `LISTEN_PORT`.
+
+[`example.env`](example.env) is the authoritative, fully-commented reference for
+**every** variable. The most important ones:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `GATEWAY` | _(empty)_ | Identifier surfaced in the message `gateway` field |
 | `LISTEN_HOST` | `0.0.0.0` | Device TCP bind host |
-| `LISTEN_PORT` | `33000` | Device TCP bind port (Howen control port) |
+| `LISTEN_PORT` | `33000` | Default device TCP bind port (per-unit `<UNIT>_PORT` overrides it) |
 | `DEVICE_WEBHOOK_URL` | _(empty)_ | Telemetry sink — universal-JSON endpoint storing all GPS/event data |
-| `DATABASE_URL` | _(empty)_ | PostgreSQL DSN for the gateway's unit registry (device verification) |
+| `DEVICE_WEBHOOK_OUTBOX_MAX` | `200000` | Cap on the durable webhook outbox; oldest undelivered rows drop beyond it (0 = no cap) |
+| `DATABASE_URL` | _(empty)_ | PostgreSQL DSN for the gateway's own state (device registry, settings, …) |
 | `HTTP_PORT` | `8080` | Management/control HTTP API port (API-key protected); `0` disables |
+| `INTERNAL_API_TOKEN` | _(empty)_ | Shared token the admin panel uses to reach the API (alongside DB-minted keys) |
 | `DEVICE_AUTH_MODE` | `postgres` if DB set, else `allow_all` | `allow_all` or `postgres` |
-| `DEVICE_REJECT_UNKNOWN` | `false` | `postgres` mode: reject serials not already in `devices` |
+| `DEVICE_REJECT_UNKNOWN` | `true` | `postgres` mode: quarantine + reject unknown serials until approved (`false` = auto-admit) |
+| `MAX_CONNECTIONS` | `20000` | DoS guard: max concurrent device connections per listener (0 = unlimited) |
+| `MAX_CONNECTIONS_PER_IP` | `0` | Per-source-IP connection cap (0 = off; leave off for carrier-NAT'd fleets) |
 | `MAPPING_REFRESH_SECONDS` | `60` | Safety-net mapping reload interval; edits already apply instantly via NOTIFY (0 disables the net) |
 | `WEBHOOK_TIMEZONE_OFFSET` | `0` | Hours offset embedded in message timestamps |
+| `DEVICE_TZ_OFFSET` | `0` | Device local-clock offset from UTC; localises Howen clip/recording windows |
+| `MEDIA_PORT` | `33001` | Device media (video) TCP port, separate from the control channel |
+| `MEDIA_ADVERTISE_HOST` | _(empty)_ | Host the device dials back for media frames; **empty disables all video** |
+| `HLS_ROOT` | `/tmp/hls` | Where ffmpeg writes HLS live-stream playlists/segments |
+| `CLIPS_ROOT` | `/var/lib/gateway/clips` | Where pulled `.mp4` clips are stored (persist this) |
+| `FFMPEG_PATH` | `ffmpeg` | ffmpeg binary used to mux HLS and clips |
+| `MEDIA_RETENTION_DAYS` | `30` | Seeds days-to-keep for stored clips/snapshots (0 = forever; editable live in admin) |
+| `ERROR_LOG_RETENTION_DAYS` | `30` | Seeds days-to-keep for gateway/device error-log rows (0 = forever; editable live) |
+| `BACKUPS_ROOT` / `BACKUP_ENABLED` / `BACKUP_TIME` / `BACKUP_RETENTION` | `/var/lib/gateway/backups` / `true` / `02:00` / `7` | Seed the scheduled gateway-DB backup defaults (editable live in admin) |
 | `DEBUG` | _(empty)_ | `1`/`*` for all, or a namespace like `tcp/howen` |
 
 ### Device authorization
@@ -301,10 +334,12 @@ A multi-unit process shares one config; each unit takes its own device port via
 - **`allow_all`** — every connecting device is admitted; no registry. Used when
   `DATABASE_URL` is unset.
 - **`postgres`** (default when a database is configured) — tracks each serial in
-  the `devices` table. By default unknown serials are **auto-provisioned and
-  admitted** (so data always flows) and lifecycle status (online/sleep/offline)
-  is written back. Set `DEVICE_REJECT_UNKNOWN=true` for the stricter behaviour:
-  unknown serials are recorded in `unknown_devices` and rejected.
+  the `devices` table. By default (`DEVICE_REJECT_UNKNOWN=true`) an unknown serial
+  is **quarantined and rejected**: it's recorded in `unknown_devices` for an
+  operator to approve in the admin panel before its data is accepted. Set
+  `DEVICE_REJECT_UNKNOWN=false` to instead **auto-provision and admit** every
+  unknown serial (so data always flows without approval). For known/approved
+  devices, lifecycle status (online/sleep/offline) is written back either way.
 
 ## Adding a unit / standing up a server
 
